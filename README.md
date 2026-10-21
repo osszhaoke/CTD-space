@@ -1,81 +1,180 @@
 # CTD-space (CTDS) · 空间与微环境授权上下文数据底座
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](compose.yaml)
+[![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)](collector/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white)](web/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](db/)
 
-**CTD-space (CTDS)** 是与 **PTDS** 协同演进的**空间与微环境授权上下文数据底座（Data Infra）**。
+**CTD-space (CTDS)** 是面向空间与睡眠微环境的**授权上下文数据底座（Data Infra）**，致力于在保护个人数据主权的前提下，构建人身状态与物理微环境之间的桥梁。
 
-它致力于在保护个人数据主权的前提下，构建人身状态与物理微环境之间的授权上下文桥梁——将**室内空间环境**（温度、湿度、CO₂、PM2.5、TVOC/NOx 等挥发性物质）与**睡眠微环境及人体体征**（床温调节、心率、HRV、呼吸率、睡眠阶段等）置于统一的时空上下文中进行协同感知与分析。
-
-- **开源协议（License）**：`Apache-2.0`
-- **当前已接入设备**：**AirGradient**（室内空气与温湿监测）、**Eight Sleep**（睡眠体征与床微环境温控）
-- **Roadmap（与 PTDS 互联）**：下一步将支持与本地加密版 **PTDS** 端到端互联，未来将承载受控域内的**多方安全计算（MPC）**、**匿踪聚合分析**，以及**细粒度、可随时撤回的匿名上下文授权**。
-- **线下体验**：本项目将在 **北京 ACC「四海健康微环境体验工坊」** 现场展出（届时也会同步带来全新本地加密版 PTDS），欢迎感兴趣的小伙伴来现场体验交流！
-
----
-
-## 核心特性（StarMap C01）
-
-面向睡眠与微环境场景的零外部依赖（Python 3.10+ 标准库 + SQLite WAL）单页空间环境与床微环境看板：
-
-- **双模块空间与体征架构**：
-  - **室内环境 · 空间空气与温湿**：7 项空气与温湿指标（温度、相对湿度、CO₂、PM2.5、TVOC 指数、NOx 指数、PM0.3 颗粒），支持局域网自动发现 AirGradient 监测设备并自助重绑，具备 11:50–12:00 历史时间轴小点悬停/点击交互。
-  - **床微环境 · 睡眠体征与温控**：6 项睡眠与温控指标（睡眠得分、睡眠阶段、心率、HRV、呼吸率、床温调节），集成 Eight Sleep 云端只读接入能力，支持凭证就绪后一键切换 `LIVE` 同步，未绑定时自动展示演示基线读数。
-- **双模式毛玻璃视觉与 iPad Pro 投屏适配**：
-  - 内置 **深翠黑夜模式**（默认）与 **暖白白昼模式** 一键切换，搭载 `backdrop-filter` 多层背景毛玻璃与环境光晕。
-  - 针对 **iPad Pro 11" / 12.9"（横屏 & 竖屏）** 及桌面大屏做响应式自适应布局与触控热区优化，支持 `Add to Home Screen` 全屏 Web App 模式。
+> **注：** 若您在无 Docker 的极简环境中需要纯 Python + SQLite 的单机运行版，可随时切换到永久归档标签 [`v0.1.0-sqlite-lite`](https://github.com/osszhaoke/CTD-space/tree/v0.1.0-sqlite-lite)。
 
 ---
 
-## 一键部署与自检（macOS）
+## 核心架构与功能
 
-双击仓库根目录的 **`一键部署_StarMap.command`**，或在终端执行：
+系统采用三容器轻量解耦架构，一键通过 Docker Compose 拉起：
 
-```bash
-bash delivery/scripts/deploy_mac.sh
+```text
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│     Next.js     │       │ Python 采集引擎  │       │  PostgreSQL 17  │
+│   Web 驾驶舱     │ <───> │   (Collector)   │ ────> │   (Database)    │
+│  (:3000 / API)  │       │ (AirGradient+8S)│       │  (JSONB 时序库)  │
+└─────────────────┘       └─────────────────┘       └─────────────────┘
+         ▲
+         │ HTTP GET /api/v1/environment/window
+         │ (供局域网 PTDS 节点拉取环境时间窗口快照)
+┌─────────────────┐
+│   PTDS 节点     │
+│ (SomaLoop手环)  │
+└─────────────────┘
 ```
 
-脚本会自动完成：
-1. 检测本机 Python 3.10+ 环境；
-2. 局域网并发探测室内环境监测设备并更新 `var/ctds-c01/config.json`（若未发现在线设备，自动保持离线冻结回放）；
-3. 运行全量 60 项单元与 UI 自检测试（`self-test`）；
-4. 启动后台环回守护服务并打开 `http://127.0.0.1:8765/`。
+1. **室内环境 · 空间空气与温湿（AirGradient）**：
+   - 1Hz 真实采样，完整采集温度、相对湿度、CO₂、PM2.5、PM1.0、PM10、TVOC、NOx 等 29 个原始指标快照；
+   - 具备权威参考基线角标（EPA 适度、WHO 日均 PM2.5、Sensirion VOC/NOx 基线），只做参考不制造焦虑；
+   - 具备 11:50–12:00 等历史时间点悬停/选中交互回溯。
+2. **床微环境 · 睡眠体征与温控（Eight Sleep）**：
+   - 10 秒级定时采集，支持左右两侧实时床温（含 ≈ 摄氏度转换查表）、床面背部与腿部角度、音频播放器状态；
+   - 完整采集睡眠评分、心率、HRV、呼吸率、睡眠分期及 30 天历史日数据断点续传（`eight_sleep_days`）；
+   - 断连不闪断机制（`metadata.display` 持久化最后有效读数）。
+3. **PTDS 跨节点 P0 环境时间窗口 API**：
+   - 提供 `GET /api/v1/environment/window?source_id=...&start_at=...&end_at=...`；
+   - 支持 PTDS 设备在观众体验结束后，一键拉取指定半开区间 `[start_at, end_at)` 内的四项环境平均值（温度、相对湿度、CO₂、PM2.5）与数据质量状态，用于合成体验纪念卡。
+4. **全端毛玻璃视觉与 iPad Pro 投屏**：
+   - 内置**深翠黑夜模式**（默认）与**暖白白昼模式**一键切换；
+   - 响应式适配 iPad Pro 11" / 12.9"（横屏并排、竖屏自适应上下排列），支持全屏 Web App 投屏。
 
 ---
 
-## 床微环境（Eight Sleep）接入命令
+## 快速上手（Docker 一键部署）
 
-获取到账号或 Bearer Token 后，可通过以下命令完成绑定与首次同步：
+### 1. 克隆代码与配置环境变量
 
 ```bash
-# 方式 A：通过一键部署脚本直接传入凭据
-bash delivery/scripts/deploy_mac.sh --es-email "your@email.com" --es-password "your_password" --es-side auto
+git clone https://github.com/osszhaoke/CTD-space.git
+cd CTD-space
 
-# 方式 B：单独运行 CLI 绑定指令
-PYTHONPATH=development/ctds python3 -B -m room_display --config var/ctds-c01/config.json \
-  --email "your@email.com" --password "your_password" --side auto --es-mode LIVE bind-eight-sleep
+# 复制环境变量模板
+cp .env.example .env
 ```
 
-> 所有运行期配置、凭据与 SQLite 数据库仅保存在本地 `var/ctds-c01/`（已列入 `.gitignore`），不会进入版本库。
+在 `.env` 中填入 Eight Sleep 账号密码（只读权限）：
 
----
+```dotenv
+EIGHT_EMAIL=your_email@example.com
+EIGHT_PASSWORD=your_password
 
-## 常用开发与验证命令
+# 可选：如果 AirGradient 在局域网特定 IP，可显式指定（未指定时走自动解析）
+# AIRGRADIENT_HOST=192.168.1.100
+
+# 房间名称（可选，默认 睡眠房）
+ROOM_NAME=睡眠房
+```
+
+### 2. 一键启动服务
 
 ```bash
-# 运行全量自动化测试套件 (60 tests)
-PYTHONPATH=development/ctds python3 -B -m unittest discover -s development/ctds/tests/room_display -v
-
-# 运行 CLI 内置自检
-PYTHONPATH=development/ctds python3 -B -m room_display --config var/ctds-c01/config.json self-test
-
-# 生成可分发给其他 Mac 的脱敏一键部署包 (输出至 var/ctds-c01/StarMap-C01-Mac-OneClick.zip)
-python3 delivery/scripts/build_mac_bundle.py
+docker compose up -d --build
 ```
 
-详细运维说明请参阅 [`docs/operations/DEPLOYMENT_AND_RUNBOOK_ZH.md`](docs/operations/DEPLOYMENT_AND_RUNBOOK_ZH.md)。
+系统将自动完成：
+- 启动 PostgreSQL 17 并自动执行 `init.sql` 建立表结构；
+- 启动 Python 采集引擎，自动连接设备并向数据库持续写入；
+- 启动 Next.js 独立服务，监听 `0.0.0.0:3000`。
+
+### 3. 访问与使用
+
+- **驾驶舱看板**：在浏览器或 iPad 打开 `http://<服务器IP>:3000`；
+- **数据源与运维管理**：访问 `http://<服务器IP>:3000/manage`，可实时查看各设备采集频率、最后接收时间、原始 JSON 快照，或手动启停数据源；
+- **停止服务**：
+  ```bash
+  docker compose down      # 停止服务并保留数据
+  ```
 
 ---
 
-## License
+## PTDS 跨节点对接 API（P0 契约）
 
-Licensed under the **Apache License, Version 2.0**.
+供运行在另一台设备上的 PTDS 在会话结束时调用：
+
+### 接口请求
+
+`GET /api/v1/environment/window`
+
+**请求参数：**
+- `source_id`：环境设备标识（默认 `airgradient`）
+- `start_at`：体验开始时间戳（UTC ISO-8601，如 `2026-10-21T01:00:00Z`）
+- `end_at`：体验结束时间戳（UTC ISO-8601，如 `2026-10-21T01:05:00Z`）
+
+**请求示例：**
+```bash
+curl -s "http://<CTDS_IP>:3000/api/v1/environment/window?source_id=airgradient&start_at=2026-10-21T01:00:00Z&end_at=2026-10-21T01:05:00Z"
+```
+
+**响应示例：**
+```json
+{
+  "contract_version": "ctds.env-window/0.1-draft",
+  "server_time": "2026-10-21T01:05:02.100Z",
+  "source_id": "airgradient",
+  "data_mode": "LIVE",
+  "time_basis": "RECEIPT_ONLY",
+  "start_at": "2026-10-21T01:00:00.000Z",
+  "end_at": "2026-10-21T01:05:00.000Z",
+  "interval": "[start_at,end_at)",
+  "metrics": {
+    "temperature": { "unit": "℃", "mean": 24.52, "sample_count": 5, "status": "CURRENT" },
+    "humidity":    { "unit": "%RH", "mean": 48.20, "sample_count": 5, "status": "CURRENT" },
+    "co2":         { "unit": "ppm", "mean": 680.00, "sample_count": 5, "status": "CURRENT" },
+    "pm2_5":       { "unit": "µg/m³", "mean": 12.10, "sample_count": 5, "status": "CURRENT" }
+  }
+}
+```
+
+---
+
+## 历史 SQLite 数据无损迁移工具
+
+如果您之前运行过 `v0.1.0-sqlite-lite`，且希望将本地积累的 `ctds_c01.sqlite3` 历史时序导入到当前 PostgreSQL 库中：
+
+```bash
+# 在 Docker Compose 启动后运行迁移脚本
+python3 tools/migrate_sqlite_to_pg.py --sqlite path/to/ctds_c01.sqlite3 --host 127.0.0.1 --port 5432
+```
+
+---
+
+## 目录结构说明
+
+```text
+├── compose.yaml                # Docker Compose 一键启动文件
+├── .env.example                # 环境变量配置模板
+├── db/
+│   └── init.sql                # PostgreSQL 幂等初始化脚本
+├── collector/                  # Python 异步采集引擎 (AirGradient + Eight Sleep)
+│   ├── Dockerfile              # Python 3.13-slim 镜像构建
+│   ├── requirements.txt        # asyncpg, httpx 极简依赖
+│   ├── store.py                # 数据库异步读写协议
+│   ├── eight_api.py            # Eight Sleep 只读 API 客户端
+│   └── sources/
+│       ├── airgradient.py      # AirGradient 1Hz 采集与动态设备发现
+│       └── eight_sleep.py      # Eight Sleep 状态采集与历史回填
+├── web/                        # Next.js 15 空间看板与 API 服务
+│   ├── Dockerfile              # Node.js Alpine 容器构建
+│   ├── app/
+│   │   ├── page.tsx            # 空间与床微环境双模块展示大屏
+│   │   ├── manage/page.tsx     # 数据源运维与实时流水管理页
+│   │   └── api/v1/environment/window/route.ts # PTDS 跨节点对接 API
+│   └── components/
+│       └── room-ui.tsx         # 卡片、趋势图与毛玻璃组件
+└── tools/
+    └── migrate_sqlite_to_pg.py # SQLite 到 PostgreSQL 历史数据迁移工具
+```
+
+---
+
+## 开源协议
+
+本项目采用 **[Apache License 2.0](LICENSE)** 协议开源。
