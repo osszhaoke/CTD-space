@@ -51,11 +51,25 @@ OBS_COLS = ("event_id", "source_id", "room_id", "metric_id", "value_status", "va
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, read_only=False):
         self.path = str(path)
+        self.read_only = bool(read_only)
+        self._lock = threading.Lock()
+        if self.read_only:
+            p = Path(self.path).resolve()
+            if self.path == ":memory:" or not p.is_file():
+                self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+                self.conn.row_factory = sqlite3.Row
+                self.conn.executescript(DDL)
+            else:
+                uri = f"file:{p.as_posix()}?mode=ro&immutable=1"
+                self.conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+                self.conn.row_factory = sqlite3.Row
+                self.conn.execute("PRAGMA busy_timeout=5000")
+            return
+
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
         self.conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA busy_timeout=5000")

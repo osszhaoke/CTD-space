@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <title>四海睡眠房 · 空间与床体数据看板</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="/static/preview.css">
+</head>
+<body>
+<div class="cockpit-shell">
+    <!-- 顶部导航栏：不要框体，自然融入背景 -->
+    <header class="top-header">
+      <div class="brand-left">
+        <!-- 4SEAS 四海官方徽标：框体去除，纯净徽标自然融入 -->
+        <div id="brand-4seas" class="brand-4seas" aria-label="4SEAS 四海标识">
+          <svg class="logo-4seas-clover" viewBox="0 0 100 100" aria-hidden="true">
+            <path d="M 19.2 5.9 Q 24.6 4.4 30.0 5.8 Q 35.4 7.2 39.3 12.3 Q 43.3 17.4 44.5 22.8 Q 45.6 28.2 45.7 33.6 Q 45.9 38.9 49.4 40.7 Q 52.9 42.5 53.9 37.2 Q 54.9 31.8 55.3 26.4 Q 55.7 21.0 58.5 15.6 Q 61.3 10.2 66.6 7.4 Q 71.8 4.5 77.2 5.0 Q 82.6 5.5 87.6 9.6 Q 92.5 13.8 94.2 19.2 Q 96.0 24.6 94.6 30.0 Q 93.3 35.4 88.5 39.6 Q 83.7 43.9 78.3 45.0 Q 72.9 46.1 67.5 46.5 Q 62.1 46.8 60.3 50.5 Q 58.5 54.2 63.9 55.1 Q 69.3 55.9 74.7 56.6 Q 80.1 57.2 85.4 60.4 Q 90.8 63.6 93.2 69.0 Q 95.7 74.4 95.0 79.8 Q 94.2 85.2 90.2 90.1 Q 86.2 95.0 80.8 95.5 Q 75.4 96.0 70.0 95.5 Q 64.6 95.0 60.8 90.1 Q 56.9 85.2 55.9 79.8 Q 54.9 74.4 54.6 69.0 Q 54.3 63.6 50.8 61.8 Q 47.2 60.0 46.4 65.4 Q 45.6 70.8 45.0 76.2 Q 44.4 81.6 41.6 87.0 Q 38.8 92.3 33.5 94.2 Q 28.2 96.0 22.8 96.0 Q 17.4 96.0 12.3 92.1 Q 7.2 88.3 5.6 82.9 Q 4.0 77.5 5.5 72.1 Q 7.1 66.7 12.0 62.6 Q 16.8 58.4 22.2 57.4 Q 27.6 56.4 33.0 56.0 Q 38.4 55.6 40.2 52.0 Q 42.0 48.3 36.6 47.2 Q 31.2 46.1 25.8 45.7 Q 20.4 45.3 15.1 42.1 Q 9.7 38.9 7.0 33.6 Q 4.4 28.2 5.1 22.8 Q 5.8 17.4 9.8 12.4 Q 13.8 7.5 19.2 5.9 Z"/>
+          </svg>
+          <svg class="logo-4seas-word" viewBox="0 0 248 64" aria-hidden="true">
+            <path fill-rule="evenodd" d="M 7.0 8.0 L 15.0 8.0 L 15.0 16.0 L 14.0 17.0 L 14.0 23.0 L 12.0 29.0 L 12.0 36.0 L 11.0 39.0 L 14.0 42.0 L 26.0 42.0 L 27.0 41.0 L 27.0 22.0 L 28.0 21.0 L 35.0 21.0 L 36.0 22.0 L 36.0 41.0 L 37.0 42.0 L 41.0 44.0 L 41.0 49.0 L 39.0 51.0 L 36.0 52.0 L 36.0 61.0 L 27.0 61.0 L 27.0 52.0 L 26.0 51.0 L 11.0 51.0 L 6.0 49.0 L 3.0 46.0 L 2.0 43.0 L 2.0 36.0 L 3.0 35.0 L 3.0 28.0 L 5.0 23.0 L 5.0 16.0 L 6.0 15.0 L 6.0 9.0 Z M 71.0 7.0 L 73.0 8.0 L 81.0 8.0 L 84.0 10.0 L 86.0 10.0 L 91.0 16.0 L 91.0 23.0 L 90.0 24.0 L 83.0 24.0 L 82.0 19.0 L 79.0 16.0 L 76.0 15.0 L 67.0 15.0 L 66.0 16.0 L 63.0 16.0 L 61.0 18.0 L 60.0 20.0 L 60.0 27.0 L 65.0 31.0 L 71.0 31.0 L 76.0 33.0 L 82.0 33.0 L 89.0 36.0 L 92.0 40.0 L 92.0 44.0 L 93.0 45.0 L 92.0 54.0 L 88.0 60.0 L 86.0 61.0 L 72.0 61.0 L 56.0 61.0 L 54.0 60.0 L 50.0 54.0 L 50.0 48.0 L 51.0 47.0 L 58.0 47.0 L 59.0 48.0 L 59.0 51.0 L 63.0 55.0 L 79.0 55.0 L 83.0 51.0 L 83.0 44.0 L 81.0 42.0 L 79.0 41.0 L 75.0 41.0 L 74.0 40.0 L 62.0 39.0 L 59.0 37.0 L 57.0 37.0 L 51.0 30.0 L 50.0 22.0 L 53.0 14.0 L 57.0 10.0 L 61.0 8.0 L 70.0 8.0 Z M 114.0 8.0 L 140.0 8.0 L 140.0 16.0 L 118.0 16.0 L 116.0 17.0 L 112.0 22.0 L 112.0 30.0 L 113.0 31.0 L 138.0 31.0 L 139.0 32.0 L 139.0 39.0 L 113.0 39.0 L 112.0 40.0 L 112.0 49.0 L 116.0 54.0 L 134.0 54.0 L 135.0 55.0 L 140.0 55.0 L 140.0 61.0 L 111.0 61.0 L 104.0 55.0 L 103.0 52.0 L 103.0 19.0 L 105.0 14.0 L 108.0 11.0 Z M 163.0 8.0 L 182.0 8.0 L 187.0 14.0 L 187.0 16.0 L 189.0 19.0 L 190.0 31.0 L 192.0 36.0 L 193.0 49.0 L 194.0 50.0 L 195.0 60.0 L 196.0 61.0 L 186.0 61.0 L 186.0 55.0 L 185.0 52.0 L 182.0 51.0 L 161.0 51.0 L 160.0 52.0 L 159.0 61.0 L 150.0 61.0 L 151.0 49.0 L 152.0 48.0 L 153.0 38.0 L 154.0 37.0 L 154.0 31.0 L 156.0 26.0 L 156.0 20.0 L 160.0 10.0 Z M 169.0 16.0 L 176.0 16.0 L 179.0 21.0 L 179.0 25.0 L 180.0 26.0 L 180.0 32.0 L 181.0 33.0 L 181.0 36.0 L 182.0 37.0 L 176.0 37.0 L 164.0 37.0 L 164.0 32.0 L 165.0 31.0 L 165.0 28.0 L 166.0 27.0 L 166.0 21.0 Z M 213.0 8.0 L 234.0 8.0 L 240.0 11.0 L 240.0 14.0 L 242.0 18.0 L 243.0 24.0 L 236.0 24.0 L 234.0 18.0 L 232.0 16.0 L 229.0 16.0 L 228.0 15.0 L 220.0 15.0 L 219.0 16.0 L 216.0 16.0 L 213.0 19.0 L 213.0 22.0 L 212.0 23.0 L 213.0 28.0 L 215.0 30.0 L 228.0 32.0 L 229.0 33.0 L 234.0 33.0 L 235.0 34.0 L 238.0 34.0 L 243.0 37.0 L 245.0 41.0 L 245.0 53.0 L 244.0 56.0 L 239.0 61.0 L 235.0 61.0 L 209.0 61.0 L 204.0 57.0 L 204.0 55.0 L 202.0 52.0 L 202.0 48.0 L 203.0 47.0 L 210.0 47.0 L 213.0 53.0 L 216.0 55.0 L 232.0 55.0 L 236.0 51.0 L 236.0 44.0 L 234.0 42.0 L 232.0 41.0 L 228.0 41.0 L 227.0 40.0 L 215.0 39.0 L 212.0 37.0 L 210.0 37.0 L 206.0 34.0 L 204.0 31.0 L 204.0 28.0 L 203.0 27.0 L 204.0 17.0 L 205.0 15.0 Z"/>
+          </svg>
+        </div>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <h1 class="room-title" id="room-name-display">睡眠房</h1>
+        <span class="preview-pill">
+          <span class="live-dot" id="live-dot"></span>
+          <span id="badge-room-status">连接中</span>
+        </span>
+      </div>
+
+      <!-- 顶部中间动作区：微环境气候分析（始终位于屏幕水平正中央） -->
+      <div class="header-center-action">
+        <button type="button" class="ai-export-btn" id="ai-export-btn" title="导出环境与床体数据，确认后跳转微环境气候分析">
+          <span class="ai-icon-container" aria-hidden="true">
+            <svg class="ai-animated-svg" viewBox="0 0 24 24" fill="none">
+              <defs>
+                <linearGradient id="aiHaloGrad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#E5CA99" stop-opacity="0.85"/>
+                  <stop offset="50%" stop-color="#70C48B" stop-opacity="0.3"/>
+                  <stop offset="100%" stop-color="#E5CA99" stop-opacity="0.85"/>
+                </linearGradient>
+                <linearGradient id="aiStarGrad" x1="4" y1="3" x2="20" y2="21" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#FFFDF9"/>
+                  <stop offset="50%" stop-color="#F2DFB9"/>
+                  <stop offset="100%" stop-color="#B58B42"/>
+                </linearGradient>
+              </defs>
+              <!-- 环形星轨动效圈（12s 慢速自旋） -->
+              <circle class="ai-svg-halo" cx="12" cy="12" r="9.5" stroke="url(#aiHaloGrad)" stroke-width="1.2" stroke-dasharray="4 3"/>
+              <!-- 主 AI 四芒星（平缓呼吸与微旋） -->
+              <path class="ai-svg-main-star" d="M12 2.5C12 7.2 15.8 11 20.5 11C15.8 11 12 14.8 12 19.5C12 14.8 8.2 11 3.5 11C8.2 11 12 7.2 12 2.5Z" fill="url(#aiStarGrad)"/>
+              <!-- 伴随微星 1 -->
+              <path class="ai-svg-twinkle-1" d="M18.8 3.5C18.8 4.8 19.7 5.8 21 5.8C19.7 5.8 18.8 6.8 18.8 8.1C18.8 6.8 17.8 5.8 16.5 5.8C17.8 5.8 18.8 4.8 18.8 3.5Z" fill="#F2DFB9"/>
+              <!-- 伴随微星 2 -->
+              <circle class="ai-svg-twinkle-2" cx="5.2" cy="17.8" r="1.3" fill="#E5CA99"/>
+            </svg>
+          </span>
+          <span class="ai-btn-title">微环境气候分析</span>
+          <svg class="ai-ext-arrow" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 右侧控制区：当前时间 / 采样时间 组合展示 -->
+      <div class="controls-right">
+        <div class="time-dual-pill">
+          <span class="time-item">
+            <span class="time-label">当前时间：</span>
+            <span class="time-val" id="live-clock">--:--:--</span>
+          </span>
+          <span class="time-sep">/</span>
+          <span class="time-item">
+            <span class="time-label">采样时间：</span>
+            <span class="time-val accent" id="sample-time">--:--:--</span>
+          </span>
+        </div>
+        <!-- 极简模式切换按钮（仅保留精致矢量图标） -->
+        <button type="button" class="theme-toggle-btn" id="theme-btn"  title="切换白昼 / 黑夜模式">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 最近 24 小时时间轴：框体稍宽、纯净舒展 -->
+    <div class="timeline-bar">
+      <div class="timeline-track-wrap">
+        <div class="timeline-rail"></div>
+        <div class="timeline-nodes-container" id="timeline-nodes-container">
+          <!-- 动态生成 25 个时间节点 (-24h 至 0h) -->
+        </div>
+      </div>
+    </div>
+
+    <!-- 主展示网格：两边框体拉满屏幕 -->
+    <div class="modules-grid">
+
+      <!-- 模块一：空间微气候监测 -->
+      <section class="module-card">
+        <div class="module-header">
+          <div class="module-title-group">
+            <!-- 重新设计的空间微气候图标：动态环流微气候流线 -->
+            <div class="module-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 8c3-2 7-2 10 0s7 2 8 0"/>
+                <path d="M3 14c3-2 7-2 10 0s7 2 8 0"/>
+                <path d="M6 19c2.5-1.2 5.5-1.2 8 0s4.5 1.2 6 0"/>
+              </svg>
+            </div>
+            <!-- 白色大字主标题 -->
+            <div class="module-title-primary">
+              <span>空间微气候</span>
+              <span class="module-title-brand">· 空间监测探针</span>
+            </div>
+          </div>
+          <span class="module-status-badge" id="badge-status-ag">连接中</span>
+        </div>
+
+        <div class="module-body-grid">
+          <!-- Row 1: CO2, PM2.5, 室内温度 -->
+          <div class="metrics-row-3">
+            <!-- CO2: 三原子分子模型图标 (O=C=O) -->
+            <div class="metric-card" id="card-co2" data-metric="co2" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3.2"/>
+                    <line x1="6.5" y1="12" x2="8.8" y2="12"/>
+                    <circle cx="4" cy="12" r="2.2"/>
+                    <line x1="15.2" y1="12" x2="17.5" y2="12"/>
+                    <circle cx="20" cy="12" r="2.2"/>
+                  </svg>
+                  CO₂ 浓度
+                  <button type="button" class="help-btn" data-help="co2" title="指标详细释义">?</button>
+                </span>
+                <span class="baseline-badge">EPA 基准</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-co2">—</span>
+                <span class="metric-unit">ppm</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-co2">
+                <div class="dot-tooltip" id="tip-co2"></div>
+                <svg class="sparkline-svg" id="svg-co2" viewBox="0 0 260 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>基准 &lt; 800 ppm</span>
+                <span class="status-tag" id="tag-co2">—</span>
+              </div>
+            </div>
+
+            <!-- PM2.5: 微粒感应同心环图标 -->
+            <div class="metric-card" id="card-pm25" data-metric="pm25" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8.5" stroke-dasharray="3 3"/>
+                    <circle cx="12" cy="12" r="4.5"/>
+                    <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+                  </svg>
+                  PM2.5 颗粒
+                  <button type="button" class="help-btn" data-help="pm25" title="指标详细释义">?</button>
+                </span>
+                <span class="baseline-badge">WHO 基准</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-pm25">—</span>
+                <span class="metric-unit">µg/m³</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-pm25">
+                <div class="dot-tooltip" id="tip-pm25"></div>
+                <svg class="sparkline-svg" id="svg-pm25" viewBox="0 0 260 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>日均限值 ≤ 15</span>
+                <span class="status-tag" id="tag-pm25">—</span>
+              </div>
+            </div>
+
+            <!-- 室内温度: 微量直立刻度温感计图标 -->
+            <div class="metric-card" id="card-temp" data-metric="temp" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M14 4.5a2 2 0 0 0-4 0v9.17a4 4 0 1 0 4 0V4.5Z"/>
+                    <circle cx="12" cy="17" r="1.8" fill="currentColor"/>
+                    <line x1="12" y1="9" x2="12" y2="15"/>
+                  </svg>
+                  室内温度
+                  <button type="button" class="help-btn" data-help="temp" title="指标详细释义">?</button>
+                </span>
+                <span class="baseline-badge">睡眠适温</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-temp">—</span>
+                <span class="metric-unit">℃</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-temp">
+                <div class="dot-tooltip" id="tip-temp"></div>
+                <svg class="sparkline-svg" id="svg-temp" viewBox="0 0 260 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>舒适区 22–26 ℃</span>
+                <span class="status-tag" id="tag-temp">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Row 2: 相对湿度, TVOC 挥发物（2 宽卡） -->
+          <div class="metrics-row-2">
+            <!-- 相对湿度: 充盈水滴带微润气弧 -->
+            <div class="metric-card" id="card-humidity" data-metric="humidity" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3a9.5 9.5 0 0 0-6.5 13.5 7.5 7.5 0 1 0 13 0A9.5 9.5 0 0 0 12 3Z"/>
+                    <path d="M9 16c1 1.5 2 2 3 2"/>
+                  </svg>
+                  相对湿度
+                  <button type="button" class="help-btn" data-help="humidity" title="指标详细释义">?</button>
+                </span>
+                <span class="baseline-badge">健康区间</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-humidity">—</span>
+                <span class="metric-unit">%RH</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-humidity">
+                <div class="dot-tooltip" id="tip-humidity"></div>
+                <svg class="sparkline-svg" id="svg-humidity" viewBox="0 0 380 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>标准 40%–60%</span>
+                <span class="status-tag" id="tag-humidity">—</span>
+              </div>
+            </div>
+
+            <!-- TVOC 指数: 挥发分子气团流线 -->
+            <div class="metric-card" id="card-tvoc" data-metric="tvoc" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 7c2-1 4-1 6 0s4 1 6 0 4-1 6 0"/>
+                    <path d="M3 12c2-1 4-1 6 0s4 1 6 0 4-1 6 0"/>
+                    <path d="M3 17c2-1 4-1 6 0s4 1 6 0 4-1 6 0"/>
+                  </svg>
+                  TVOC 挥发物指数
+                  <button type="button" class="help-btn" data-help="tvoc" title="指标详细释义">?</button>
+                </span>
+                <span class="baseline-badge">基准 100</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-tvoc">—</span>
+                <span class="metric-unit">pt</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-tvoc">
+                <div class="dot-tooltip" id="tip-tvoc"></div>
+                <svg class="sparkline-svg" id="svg-tvoc" viewBox="0 0 380 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>Sensirion 算法基线</span>
+                <span class="status-tag" id="tag-tvoc">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 模块二：睡眠微环境（4SEAS Pod 6 Solo） -->
+      <section class="module-card">
+        <div class="module-header">
+          <div class="module-title-group">
+            <!-- 重新设计的睡眠微环境图标：智能床垫微气候温层承托波纹 -->
+            <div class="module-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2 17h20"/>
+                <path d="M2 17v3M22 17v3"/>
+                <rect x="2" y="11" width="20" height="4" rx="2"/>
+                <path d="M5 7c2-1 4-1 6 0s4 1 6 0" stroke-dasharray="2 2"/>
+              </svg>
+            </div>
+            <!-- 白色大字主标题 -->
+            <div class="module-title-primary">
+              <span>睡眠微环境</span>
+              <span class="module-title-brand">· 智能温控床体</span>
+            </div>
+          </div>
+          <!-- 右上角 Pod 6 状态 -->
+          <span class="module-status-badge" id="badge-status-es">连接中</span>
+        </div>
+
+        <div class="module-body-grid">
+          <!-- Row 1（对应左侧第一行 3 张）：左侧床温、右侧床温 2 张宽卡 -->
+          <div class="metrics-row-2 metrics-row-upper">
+            <div class="metric-card" id="card-es-left" data-metric="es_left" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <div class="card-title-group">
+                  <span class="metric-name">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><line x1="12" y1="5" x2="12" y2="19" stroke-dasharray="2 2"/><circle cx="7.5" cy="12" r="2.5" fill="currentColor"/></svg>
+                    左侧床温
+                    <button type="button" class="help-btn" data-help="es_left" title="指标详细释义">?</button>
+                  </span>
+                  <span class="metric-sublabel">当前 / 目标</span>
+                </div>
+                <span class="baseline-badge highlight" id="badge-es-left">—</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-es-left">—</span>
+                <span class="metric-unit">℃ / 目标 <span id="sub-es-left">—</span> ℃</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-es-left">
+                <div class="dot-tooltip" id="tip-es-left"></div>
+                <svg class="sparkline-svg" id="svg-es-left" viewBox="0 0 380 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>左侧温控等级查表换算</span>
+                <span class="status-tag" id="tag-es-left">—</span>
+              </div>
+            </div>
+            <div class="metric-card" id="card-es-right" data-metric="es_right" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <div class="card-title-group">
+                  <span class="metric-name">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><line x1="12" y1="5" x2="12" y2="19" stroke-dasharray="2 2"/><circle cx="16.5" cy="12" r="2.5" fill="currentColor"/></svg>
+                    右侧床温
+                    <button type="button" class="help-btn" data-help="es_right" title="指标详细释义">?</button>
+                  </span>
+                  <span class="metric-sublabel">当前 / 目标</span>
+                </div>
+                <span class="baseline-badge highlight" id="badge-es-right">—</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-es-right">—</span>
+                <span class="metric-unit">℃ / 目标 <span id="sub-es-right">—</span> ℃</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-es-right">
+                <div class="dot-tooltip" id="tip-es-right"></div>
+                <svg class="sparkline-svg" id="svg-es-right" viewBox="0 0 380 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>右侧温控等级查表换算</span>
+                <span class="status-tag" id="tag-es-right">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Row 2（对应左侧第二行 2 张）：运作状态、全夜床体温度、抬升角度 3 张卡，与左侧斜角镜像 -->
+          <div class="metrics-row-3 metrics-row-lower">
+            <div class="metric-card" id="card-es-state" data-metric="es_state" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><polyline points="21 21 21 16 16 16"/></svg>
+                    床温运作状态
+                    <button type="button" class="help-btn" data-help="es_state" title="指标详细释义">?</button>
+                  </span>
+                <span class="baseline-badge" id="badge-es-state">—</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value metric-value-state" id="val-es-state">—</span>
+              </div>
+              <div class="card-detail-rows" id="detail-es-state">
+                <div class="detail-row"><span class="detail-side">左侧</span><span class="detail-val" id="detail-es-state-left">—</span></div>
+                <div class="detail-row"><span class="detail-side">右侧</span><span class="detail-val" id="detail-es-state-right">—</span></div>
+              </div>
+              <div class="card-foot">
+                <span>当前等级 → 目标等级</span>
+                <span class="status-tag" id="tag-es-state">—</span>
+              </div>
+            </div>
+            <div class="metric-card" id="card-es-night" data-metric="es_night" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/><path d="M3 19h18"/></svg>
+                    全夜床体温度
+                    <button type="button" class="help-btn" data-help="es_night" title="指标详细释义">?</button>
+                  </span>
+                <span class="baseline-badge" id="badge-es-night">—</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value" id="val-es-night">—</span>
+                <span class="metric-unit">℃</span>
+              </div>
+              <div class="card-trend-row" id="trend-box-es-night">
+                <div class="dot-tooltip" id="tip-es-night"></div>
+                <svg class="sparkline-svg" id="svg-es-night" viewBox="0 0 260 70" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="card-foot">
+                <span>最近一次睡眠会话均值</span>
+                <span class="status-tag" id="tag-es-night">—</span>
+              </div>
+            </div>
+            <div class="metric-card" id="card-es-elev" data-metric="es_elev" title="点击查看近 24 小时时序图">
+              <div class="card-top">
+                <span class="metric-name">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 19h20"/><path d="M4 16l6-5 6 2 4-4"/><circle cx="20" cy="9" r="1.5"/></svg>
+                    床面抬升角度
+                    <button type="button" class="help-btn" data-help="es_elev" title="指标详细释义">?</button>
+                  </span>
+                <span class="baseline-badge" id="badge-es-elev">—</span>
+              </div>
+              <div class="card-val-row">
+                <span class="metric-value metric-value-state" id="val-es-elev">—</span>
+              </div>
+              <div class="card-detail-rows" id="detail-es-elev">
+                <div class="detail-row"><span class="detail-side">左侧</span><span class="detail-val" id="detail-es-elev-left">—</span></div>
+                <div class="detail-row"><span class="detail-side">右侧</span><span class="detail-val" id="detail-es-elev-right">—</span></div>
+              </div>
+              <div class="card-foot">
+                <span>智能底座 · 背部 / 腿部</span>
+                <span class="status-tag" id="tag-es-elev">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ==================================================== -->
+  <!-- 过去时序大图模态框（极奢半透明毛玻璃） -->
+  <!-- ==================================================== -->
+  <div class="modal-backdrop" id="chart-modal-backdrop">
+    <div class="modal-dialog" id="chart-modal-dialog">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-title-row">
+            <svg class="modal-title-icon" id="modal-metric-icon" viewBox="0 0 24 24"></svg>
+            <h2 class="modal-title-text" id="modal-metric-title">时序大图</h2>
+          </div>
+          <div class="modal-subtitle">
+            <span id="modal-metric-source">室内微气候监测系统</span>
+            <span>·</span>
+            <span id="modal-metric-range">近 24 小时</span>
+          </div>
+        </div>
+        <button type="button" class="modal-close-btn" id="modal-close-btn" title="关闭 (ESC)" aria-label="关闭">×</button>
+      </div>
+
+      <!-- 大图画布 -->
+      <div class="modal-chart-wrap" id="modal-chart-wrap">
+        <div class="chart-scrubber-tip" id="modal-scrubber-tip"></div>
+        <svg class="modal-svg" id="modal-svg-chart" viewBox="0 0 860 260" preserveAspectRatio="none"></svg>
+      </div>
+
+      <!-- 底部统计指标看板 -->
+      <div class="modal-stats-grid">
+        <div class="modal-stat-card">
+          <span class="modal-stat-label">当前采样读数</span>
+          <span class="modal-stat-value" id="modal-stat-curr">—</span>
+          <span class="modal-stat-sub" id="modal-stat-curr-status">—</span>
+        </div>
+        <div class="modal-stat-card">
+          <span class="modal-stat-label">观测均值</span>
+          <span class="modal-stat-value" id="modal-stat-avg">—</span>
+          <span class="modal-stat-sub" id="modal-stat-avg-status">—</span>
+        </div>
+        <div class="modal-stat-card">
+          <span class="modal-stat-label">极值波动区间</span>
+          <span class="modal-stat-value" id="modal-stat-range">—</span>
+          <span class="modal-stat-sub" id="modal-stat-range-status">—</span>
+        </div>
+        <div class="modal-stat-card">
+          <span class="modal-stat-label">真实采样点数</span>
+          <span class="modal-stat-value" id="modal-stat-quality">—</span>
+          <span class="modal-stat-sub">真实时序采样</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================================================== -->
+  <!-- 点击 ? 弹出的释义浮窗 (毛玻璃 Popover) -->
+  <!-- ==================================================== -->
+  <div class="help-popover" id="help-popover">
+    <div class="popover-header">
+      <div class="popover-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></svg>
+        <span id="popover-title-text">指标释义</span>
+      </div>
+      <span class="popover-close">×</span>
+    </div>
+    <div class="popover-body" id="popover-body-text">
+      指标解释内容...
+    </div>
+    <div class="popover-baseline" id="popover-baseline-text">
+      权威参考标准：...
+    </div>
+  </div>
+
+  <!-- ==================================================== -->
+  <!-- AI 一键复制与跳转反馈 Toast -->
+  <!-- ==================================================== -->
+  <div class="ai-toast" id="ai-toast" role="status" aria-live="polite">
+    <svg class="ai-toast-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+    </svg>
+    <div class="ai-toast-content">
+      <span class="ai-toast-main">已复制环境与床体数据切片，正在跳转 DeepSeek...</span>
+      <span class="ai-toast-sub">到达新页面后直接粘贴 (Cmd/Ctrl+V) 即可开始专家诊断</span>
+    </div>
+  </div>
+
+  <!-- AI 专家诊断导出确认模态框 -->
+  <div class="modal-backdrop crosshair-hidden" id="ai-modal-backdrop" aria-hidden="true">
+    <div class="modal-dialog ai-modal-content" id="ai-modal-dialog">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3 class="modal-title-primary">导出环境与床体数据并跳转微环境气候分析</h3>
+          <span class="modal-subtitle">4SEAS 空间微气候与床体微环境专家分析</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="ai-modal-close-btn" aria-label="关闭">×</button>
+      </div>
+      <p class="popover-body">以下为当前提取的环境与床体运行数据切片（不含心率 / HRV / 呼吸等个人生理指标，已剔除一切设备标识与网络凭据）。点击确认后将复制到剪贴板并开启诊断窗口：</p>
+      <div class="ai-modal-warning" id="ai-modal-warning">
+        <span class="ai-modal-warning-icon">⚠️</span>
+        <span>将复制至第三方 DeepSeek · 请确认内容后再提交</span>
+      </div>
+      <pre class="ai-modal-pre" id="ai-modal-pre"></pre>
+      <div class="ai-modal-actions">
+        <button type="button" class="btn-ghost" id="ai-modal-cancel-btn">取消</button>
+        <button type="button" class="btn-gold" id="ai-modal-confirm-btn">确认复制并开启诊断 ➔</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/preview.js"></script>
+</body>
+</html>

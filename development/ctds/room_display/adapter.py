@@ -19,6 +19,36 @@ from . import catalog
 PATH = "/measures/current"
 MAX_BYTES = 65536
 PROVENANCES = ("LIVE", "REPLAY", "SYNTHETIC")
+NO_CONNECTION = "NO_CONNECTION"
+AUTH_REJECTED = "AUTH_REJECTED"
+
+
+def get_ssl_context():
+    """Create an SSL context with fallback to macOS system root certificates.
+
+    Resolves the classic macOS python.org bug where OpenSSL root certificates are uninstalled.
+    """
+    import os, ssl
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+        return ctx
+    except Exception:
+        pass
+    for path in (
+        "/etc/ssl/cert.pem",
+        "/private/etc/ssl/cert.pem",
+        "/usr/local/etc/openssl/cert.pem",
+        "/opt/homebrew/etc/openssl@3/cert.pem",
+    ):
+        if os.path.isfile(path):
+            try:
+                ctx.load_verify_locations(path)
+                return ctx
+            except Exception:
+                pass
+    return ctx
 
 
 class AdapterError(Exception):

@@ -101,6 +101,7 @@ class ServerTest(unittest.TestCase):
             ({"fields": [good], "url": "http://x"}, {}, 400),
             ({"fields": [good]}, {"Content-Type": "text/plain"}, 415),
             ({"fields": [good]}, {"Origin": "http://evil.example"}, 403),
+            ({"fields": [good]}, {"Origin": f"http://0.0.0.0:{self.port}"}, 403),
         ]
         rev = self.store.config_revision("demo-room-01")
         for body, headers, code in cases:
@@ -111,6 +112,35 @@ class ServerTest(unittest.TestCase):
     def test_unknown_path_and_traversal(self):
         for p in ("/static/../server.py", "/static/x.js", "/etc/passwd", "/api/v1/admin"):
             self.assertEqual(self.req("GET", p)[0], 404, p)
+
+    def test_container_and_network_ip_filtering(self):
+        # 1. Loopback is always allowed
+        self.assertTrue(server._is_allowed_client_ip("127.0.0.1", is_container=False))
+        self.assertTrue(server._is_allowed_client_ip("127.0.0.1", is_container=True))
+
+        # 2. Outside container, Docker bridge 172.16.0.0/12 is REJECTED (TD-6)
+        self.assertFalse(server._is_allowed_client_ip("172.17.0.1", is_container=False))
+        self.assertFalse(server._is_allowed_client_ip("172.16.0.2", is_container=False))
+
+        # 3. Inside container, Docker bridge 172.16.0.0/12 is ALLOWED
+        self.assertTrue(server._is_allowed_client_ip("172.17.0.1", is_container=True))
+        self.assertTrue(server._is_allowed_client_ip("172.16.0.2", is_container=True))
+
+        # 4. External LAN IP is rejected in container unless explicitly allowlisted
+        self.assertFalse(server._is_allowed_client_ip("192.168.1.50", is_container=True))
+
+        # 5. Explicit CTDS_ALLOWED_NETWORKS works
+        import os
+        old = os.environ.get("CTDS_ALLOWED_NETWORKS")
+        try:
+            os.environ["CTDS_ALLOWED_NETWORKS"] = "192.168.1.0/24"
+            self.assertTrue(server._is_allowed_client_ip("192.168.1.50", is_container=False))
+            self.assertFalse(server._is_allowed_client_ip("10.0.0.1", is_container=False))
+        finally:
+            if old is None:
+                os.environ.pop("CTDS_ALLOWED_NETWORKS", None)
+            else:
+                os.environ["CTDS_ALLOWED_NETWORKS"] = old
 
 
 if __name__ == "__main__":
