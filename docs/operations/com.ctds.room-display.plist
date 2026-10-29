@@ -8,22 +8,26 @@
 
   <key>ProgramArguments</key>
   <array>
-    <!-- 请根据实际环境调整 python3 绝对路径，例如 /opt/homebrew/bin/python3 或 /usr/bin/python3 -->
-    <string>/opt/homebrew/bin/python3</string>
+    <!-- 使用 /usr/bin/env python3 自动解析本机 python3，兼顾 Apple Silicon 与 Intel Mac -->
+    <string>/usr/bin/env</string>
+    <string>python3</string>
     <string>-B</string>
     <string>-m</string>
     <string>room_display</string>
     <string>run</string>
   </array>
 
-  <!-- 工作区根目录绝对路径 -->
+  <!-- 工作区根目录绝对路径（请在目标机上替换为实际解压目录绝对路径，例如 /Users/yourname/StarMap-C01-Mac） -->
   <key>WorkingDirectory</key>
-  <string>/Users/osszhaoke/Downloads/001-CTDSvFoundation-StarMap</string>
+  <string>/path/to/StarMap-C01-Mac</string>
 
   <key>EnvironmentVariables</key>
   <dict>
     <key>PYTHONPATH</key>
     <string>development/ctds</string>
+    <!-- 显式设置 PATH 优先查找 Homebrew (/opt/homebrew) 与 Intel (/usr/local) 的 Python 3.10+，避免被 launchd 默认 PATH 解析至旧版 3.9 -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 
   <!-- 登录系统后自动启动 -->
@@ -37,11 +41,11 @@
     <false/>
   </dict>
 
-  <!-- 运行日志与错误输出重定向至私密 var 目录 -->
+  <!-- 运行日志与错误输出重定向至私密 var 目录（请对齐目标机实际路径） -->
   <key>StandardOutPath</key>
-  <string>/Users/osszhaoke/Downloads/001-CTDSvFoundation-StarMap/var/ctds-c01/launchd_stdout.log</string>
+  <string>/path/to/StarMap-C01-Mac/var/ctds-c01/launchd_stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/osszhaoke/Downloads/001-CTDSvFoundation-StarMap/var/ctds-c01/launchd_stderr.log</string>
+  <string>/path/to/StarMap-C01-Mac/var/ctds-c01/launchd_stderr.log</string>
 
   <!-- 避免短时间反复崩溃时无节制重试 -->
   <key>ThrottleInterval</key>
