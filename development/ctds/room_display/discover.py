@@ -188,24 +188,8 @@ def auto_bind(config_path=None, *, candidates=None, timeout=0.8, fetcher=None):
         changed = True
 
     es = cfg.setdefault("eight_sleep", dict(config.DEFAULTS["eight_sleep"]))
-    env_email = os.environ.get("EIGHT_SLEEP_EMAIL")
-    env_pass = os.environ.get("EIGHT_SLEEP_PASSWORD")
-    env_tok = os.environ.get("EIGHT_SLEEP_BEARER_TOKEN")
-    if (env_email and env_pass) or env_tok:
-        if env_email:
-            es["email"] = env_email
-        if env_pass:
-            es["password"] = env_pass
-        if env_tok:
-            es["bearer_token"] = env_tok
-        if es.get("mode") != "LIVE":
-            es["mode"] = "LIVE"
-            es["binding_revision"] = int(es.get("binding_revision", 1)) + 1
+    if config.migrate_doc(cfg):
         changed = True
-    elif (es.get("email") and es.get("password")) or es.get("bearer_token"):
-        if es.get("mode") == "READY":
-            es["mode"] = "LIVE"
-            changed = True
 
     preferred = cfg["source"].get("base_url")
     found = discover_airgradient(preferred_base_url=preferred, candidates=candidates,
@@ -222,8 +206,7 @@ def auto_bind(config_path=None, *, candidates=None, timeout=0.8, fetcher=None):
             changed = True
 
     if changed:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        config.save_config(cfg, path)
 
     return {
         "discovered": found is not None,

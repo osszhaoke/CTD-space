@@ -26,9 +26,9 @@ FORBIDDEN_FIELDS = frozenset({"serialno", "wifi", "model", "firmware", "boot", "
 
 POD5_DESCRIPTOR = {
     "provider": "eight_sleep",
-    "device_class": "Pod 5",
+    "device_class": "Pod 6",
     "status": "READY_NOT_CONNECTED",
-    "label_zh": "Eight Sleep Pod 5",
+    "label_zh": "Eight Sleep Pod 6",
     "status_zh": "待接入",
     "note_zh": "本期仅登记，不连接账号、不读取个人数据、不控制设备",
     "metrics": [],  # intentionally empty; no toggle can add personal metrics

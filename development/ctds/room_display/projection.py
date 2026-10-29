@@ -19,8 +19,12 @@ ERROR_ZH = {
 }
 STATUS_ZH = {"CURRENT": "实时", "STALE": "已过期", "NO_DATA": "暂无数据", "NOT_PROVIDED": "设备未提供",
              "EXPLICIT_NULL": "设备返回空值", "INVALID": "数值无效"}
-TREND_WINDOW = dt.timedelta(hours=6)
+TREND_WINDOW = dt.timedelta(hours=1)   # small cards: last 1 hour, not downsampled at 60 s polling
 TREND_POINTS = 120
+HISTORY_MAX_HOURS = 24                  # chart modal and timeline: last 24 hours
+HISTORY_POINTS = 288                    # ~5 min per point over 24 h
+TIMELINE_TOLERANCE = dt.timedelta(minutes=30)
+SERIES_FETCH_LIMIT = 100000
 
 
 def _parse(s):
@@ -96,9 +100,92 @@ def build_display(store, cfg, now=None):
         "last_success_at": ok["response_received_at"] if ok else None,
         "last_success_age_s": ok_age,
         "stale_after_s": stale_after,
+        "poll_interval_s": cfg.get("poll_interval_s", 60),
+        "trend_window_s": int(TREND_WINDOW.total_seconds()),
         "error_summary_zh": None if (last is None or last["outcome"] == "OK") else ERROR_ZH.get(last["outcome"], "未知错误"),
         "metrics": metrics_view,
         "pod": {k: catalog.POD5_DESCRIPTOR[k] for k in ("label_zh", "status", "status_zh", "note_zh")},
         "eight_sleep": eight_sleep.build_view(store, cfg, now=now, ref_timestamps=ref_ts),
         "config_revision": store.config_revision(room_id),
     }
+
+
+def _history_source(cfg, metric_id):
+    """Return (source_id, provenance) whose stored observations back metric_id, or None if not readable."""
+    from . import eight_sleep
+    if metric_id in catalog.METRICS:
+        return cfg["source"]["source_id"], ("LIVE" if cfg["source"]["mode"] == "LIVE" else "SYNTHETIC")
+    if metric_id in eight_sleep.EIGHT_SLEEP_METRICS:
+        es_cfg = dict(eight_sleep.DEFAULT_ES_CONFIG)
+        if isinstance(cfg.get("eight_sleep"), dict):
+            es_cfg.update(cfg["eight_sleep"])
+        if es_cfg["mode"] == "READY":
+            return None  # not connected: no history may be shown
+        return es_cfg["source_id"], ("LIVE" if es_cfg["mode"] == "LIVE" else "SYNTHETIC")
+    return None
+
+
+def history_metric_ids(cfg):
+    from . import eight_sleep
+    return set(catalog.METRICS) | set(eight_sleep.EIGHT_SLEEP_METRICS)
+
+
+def build_series(store, cfg, metric_id, hours, now=None):
+    """Real observations of one metric over the last `hours` (1..24), downsampled to HISTORY_POINTS."""
+    from . import eight_sleep
+    now = now or adapter.utc_now()
+    unit = (catalog.METRICS.get(metric_id) or eight_sleep.EIGHT_SLEEP_METRICS.get(metric_id) or {}).get("unit")
+    src = _history_source(cfg, metric_id)
+    points, provenance = [], None
+    if src is not None:
+        _, provenance = src
+        since = adapter.iso(now - dt.timedelta(hours=hours))
+        rows = store.series(cfg["room_id"], metric_id, since, limit=SERIES_FETCH_LIMIT, provenance=provenance)
+        points = _downsample([[p["t"], p["value"]] for p in rows], HISTORY_POINTS)
+    return {"metric_id": metric_id, "unit": unit, "window_h": hours, "provenance": provenance,
+            "generated_at": adapter.iso(now), "points": points}
+
+
+def _nearest(points, target, tolerance):
+    """points: [(datetime, value, iso)] sorted by time. Nearest within tolerance, else None. No interpolation."""
+    best, best_diff = None, None
+    lo, hi = 0, len(points)
+    while lo < hi:  # first index with time >= target
+        mid = (lo + hi) // 2
+        if points[mid][0] < target:
+            lo = mid + 1
+        else:
+            hi = mid
+    for i in (lo - 1, lo):
+        if 0 <= i < len(points):
+            diff = abs((points[i][0] - target).total_seconds())
+            if diff <= tolerance.total_seconds() and (best_diff is None or diff < best_diff):
+                best, best_diff = points[i], diff
+    return {"value": best[1], "observed_at": best[2]} if best else None
+
+
+def build_timeline(store, cfg, hours=24, now=None):
+    """`hours` whole-hour nodes ending at the current hour, plus a final "now" node.
+
+    Each node carries, per metric, the nearest real observation within ±30 min (else null)."""
+    now = now or adapter.utc_now()
+    top = now.replace(minute=0, second=0, microsecond=0)
+    anchors = [top - dt.timedelta(hours=hours - 1 - i) for i in range(hours)] + [now]
+    since = adapter.iso(anchors[0] - TIMELINE_TOLERANCE)
+    enabled = [s["metric_id"] for s in store.display_settings(cfg["room_id"]) if s["enabled"]]
+    from . import eight_sleep
+    metric_ids = enabled + sorted(eight_sleep.EIGHT_SLEEP_METRICS, key=lambda k: eight_sleep.EIGHT_SLEEP_METRICS[k]["order"])
+    series = {}
+    for mid in metric_ids:
+        src = _history_source(cfg, mid)
+        if src is None:
+            series[mid] = []
+            continue
+        rows = store.series(cfg["room_id"], mid, since, limit=SERIES_FETCH_LIMIT, provenance=src[1])
+        series[mid] = [(_parse(p["t"]), p["value"], p["t"]) for p in rows]
+    nodes = []
+    for i, t in enumerate(anchors):
+        nodes.append({"index": i, "t": adapter.iso(t), "is_now": i == len(anchors) - 1,
+                      "values": {mid: _nearest(series[mid], t, TIMELINE_TOLERANCE) for mid in metric_ids}})
+    return {"room_id": cfg["room_id"], "window_h": hours, "generated_at": adapter.iso(now),
+            "tolerance_s": int(TIMELINE_TOLERANCE.total_seconds()), "nodes": nodes}

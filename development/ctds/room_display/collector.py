@@ -1,5 +1,6 @@
 """Polling collector: timeout, bounded retry/backoff, auth pause, clean stop."""
 import logging
+import os
 import threading
 import uuid
 
@@ -52,6 +53,7 @@ class Collector:
         self.sleep = sleeper or (lambda s: self.stop_event.wait(s))
         self.consecutive_failures = 0
         self.paused_reason = None
+        self._last_es_poll_at = 0.0
 
     def round(self):
         """One polling round with bounded retries. Returns final outcome."""
@@ -62,7 +64,12 @@ class Collector:
                 break
             self.sleep(d)
             outcome = ingest_once(self.store, self.cfg, self.fetcher, provenance=self.provenance, clock=self.clock)
-        if outcome in ("NO_CONNECTION", "TIMEOUT") and self.config_path is not None and not self.stop_event.is_set():
+        if (
+            outcome in ("NO_CONNECTION", "TIMEOUT")
+            and self.config_path is not None
+            and not self.stop_event.is_set()
+            and os.environ.get("CTDS_TEST_SANDBOX") != "1"
+        ):
             from . import discover
             bound = discover.auto_bind(self.config_path)
             if bound["discovered"]:
@@ -80,8 +87,16 @@ class Collector:
             self.store.set_source_status(self.cfg["source"]["source_id"], "AUTH_PAUSED", adapter.iso(self.clock()))
         es_mode = (self.cfg.get("eight_sleep") or {}).get("mode", "READY")
         if es_mode in ("LIVE", "SYNTHETIC") and not self.stop_event.is_set():
-            from . import eight_sleep
-            eight_sleep.ingest_once(self.store, self.cfg, clock=self.clock)
+            try:
+                from . import eight_sleep
+                eight_sleep.ingest_once(self.store, self.cfg, clock=self.clock, config_path=self.config_path)
+            except Exception as exc:
+                log.warning("Eight Sleep round poll failed: %s", type(exc).__name__)
+            try:
+                self._last_es_poll_at = self.clock().timestamp()
+            except Exception:
+                import time
+                self._last_es_poll_at = time.time()
         return outcome
 
     def next_delay(self):
@@ -89,6 +104,27 @@ class Collector:
         if self.consecutive_failures <= 1:
             return base
         return min(base * (2 ** (self.consecutive_failures - 1)), self.cfg["max_backoff_s"])
+
+    def poll_eight_sleep_if_due(self):
+        """Poll Eight Sleep on its own cadence (e.g. 60s) even if AirGradient is in backoff."""
+        if self.stop_event.is_set():
+            return
+        es_mode = (self.cfg.get("eight_sleep") or {}).get("mode", "READY")
+        if es_mode not in ("LIVE", "SYNTHETIC"):
+            return
+        try:
+            now_ts = self.clock().timestamp()
+        except Exception:
+            import time
+            now_ts = time.time()
+        es_interval = self.cfg.get("poll_interval_s", 60)
+        if now_ts - self._last_es_poll_at >= es_interval:
+            self._last_es_poll_at = now_ts
+            try:
+                from . import eight_sleep
+                eight_sleep.ingest_once(self.store, self.cfg, clock=self.clock, config_path=self.config_path)
+            except Exception as exc:
+                log.warning("Eight Sleep periodic poll failed: %s", type(exc).__name__)
 
     def run(self, max_rounds=None):
         rounds = 0
@@ -98,10 +134,22 @@ class Collector:
             log.info("round=%d outcome=%s consecutive_failures=%d", rounds, outcome, self.consecutive_failures)
             if self.paused_reason:
                 log.warning("source paused: %s (restart after operator fixes binding)", self.paused_reason)
+                # AirGradient paused must not stop Eight Sleep: keep its own cadence until stopped.
+                if max_rounds is None:
+                    while not self.stop_event.is_set():
+                        self.sleep(1.0)
+                        self.poll_eight_sleep_if_due()
                 return self.paused_reason
             if max_rounds is not None and rounds >= max_rounds:
                 break
-            self.sleep(self.next_delay())
+            delay = self.next_delay()
+            chunk = 1.0
+            slept = 0.0
+            while slept < delay and not self.stop_event.is_set():
+                to_sleep = min(chunk, delay - slept)
+                self.sleep(to_sleep)
+                slept += to_sleep
+                self.poll_eight_sleep_if_due()
         return "STOPPED"
 
     def stop(self):
