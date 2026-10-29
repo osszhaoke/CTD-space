@@ -1,13 +1,59 @@
 """Shared test helpers. All data here is SYNTHETIC or a loopback fake device; never LIVE evidence."""
 import datetime as dt
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+os.environ.setdefault("CTDS_TEST_SANDBOX", "1")
+
 ROOT = Path(__file__).absolute().parents[4]
 sys.path.insert(0, str(ROOT / "development/ctds"))
+
+# ---------------------------------------------------------------------------
+# Global real-runtime-DB guard (independent audit P2, 2026-10-24).
+# Every test module imports this helper, so the whole suite runs under this guard: any attempt to open the real
+# runtime database other than strictly read-only (`mode=ro&immutable=1`) raises immediately. This holds even
+# while a live collector is writing to that database, where before/after hash comparisons would be unreliable.
+# ---------------------------------------------------------------------------
+import sqlite3 as _sqlite3
+
+REAL_RUNTIME_DB = os.path.realpath(str(ROOT / "var/ctds-c01/ctds_c01.sqlite3"))
+REAL_DB_VIOLATIONS = []
+
+
+class RealRuntimeDbAccess(AssertionError):
+    pass
+
+
+def _db_target(database):
+    s = os.fspath(database) if not isinstance(database, str) else database
+    if not isinstance(s, str):
+        return None, ""
+    path = s[5:].split("?", 1)[0] if s.startswith("file:") else s
+    try:
+        return os.path.realpath(path), s
+    except (OSError, ValueError):
+        return None, s
+
+
+if not getattr(_sqlite3.connect, "_ctds_real_db_guard", False):
+    _original_connect = _sqlite3.connect
+
+    def _guarded_connect(database, *args, **kwargs):
+        target, raw = _db_target(database)
+        if target == REAL_RUNTIME_DB:
+            query = raw.split("?", 1)[1] if (raw.startswith("file:") and "?" in raw) else ""
+            params = set(query.split("&")) if query else set()
+            if not ({"mode=ro", "immutable=1"} <= params and kwargs.get("uri")):
+                REAL_DB_VIOLATIONS.append(raw)
+                raise RealRuntimeDbAccess(f"tests may open the real runtime DB only with mode=ro&immutable=1: {raw}")
+        return _original_connect(database, *args, **kwargs)
+
+    _guarded_connect._ctds_real_db_guard = True
+    _sqlite3.connect = _guarded_connect
 
 T0 = dt.datetime(2026, 10, 12, 8, 0, 0, tzinfo=dt.timezone.utc)
 
