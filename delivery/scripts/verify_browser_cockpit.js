@@ -2,8 +2,11 @@
  * StarMap C01 · Browser Headless Automated Verification Script
  * Validates real browser interaction:
  * 1. Card click opens high-precision detail modal (modal .open class & visibility);
- * 2. AI button click opens DeepSeek diagnosis export modal;
- * 3. Zero Content Security Policy (CSP) violations.
+ * 2. Modal range tabs (24h / 7d / 30d / all) switch the active tab and re-render;
+ * 3. #card-tvoc shows TVOC concentration (ppb);
+ * 4. AI button click opens DeepSeek diagnosis export modal;
+ * 5. Zero Content Security Policy (CSP) violations and zero uncaught exceptions.
+ * Target URL: CTDS_URL env (default http://127.0.0.1:8765/).
  */
 const { spawn } = require("child_process");
 const fs = require("fs");
@@ -53,18 +56,35 @@ async function runBrowserCheck() {
     await new Promise(r => ws.addEventListener("open", r));
 
     const consoleLogs = [];
+    const exceptions = [];
     ws.addEventListener("message", (evt) => {
       const msg = JSON.parse(evt.data);
       if (msg.method === "Log.entryAdded") consoleLogs.push(msg.params.entry);
       if (msg.method === "Runtime.consoleAPICalled") consoleLogs.push(msg.params);
+      if (msg.method === "Runtime.exceptionThrown") exceptions.push(msg.params.exceptionDetails);
     });
 
     await send("Log.enable");
     await send("Runtime.enable");
     await send("Page.enable");
 
-    await send("Page.navigate", { url: "http://127.0.0.1:8765/" });
+    const targetUrl = process.env.CTDS_URL || "http://127.0.0.1:8765/";
+    await send("Page.navigate", { url: targetUrl });
     await new Promise(r => setTimeout(r, 2000));
+
+    // 0. TVOC card shows concentration in ppb (8PSL tvoc_ppb)
+    const evalTvoc = await send("Runtime.evaluate", {
+      expression: `(() => {
+        const card = document.getElementById("card-tvoc");
+        return card ? card.textContent.replace(/\\s+/g, " ") : "";
+      })()`,
+      returnByValue: true
+    });
+    const tvocText = evalTvoc.result.value || "";
+    if (!tvocText.includes("TVOC 浓度") || !tvocText.includes("ppb")) {
+      throw new Error("card-tvoc does not render TVOC 浓度 / ppb: " + tvocText.slice(0, 120));
+    }
+    console.log("PASS: #card-tvoc renders TVOC 浓度 (ppb)");
 
     // 1. Click card-co2 to open chart modal
     await send("Runtime.evaluate", {
@@ -73,26 +93,52 @@ async function runBrowserCheck() {
         if (card) card.click();
       })()`
     });
-    // Wait for transition (0.28s cubic-bezier)
-    await new Promise(r => setTimeout(r, 400));
-
-    const evalCard = await send("Runtime.evaluate", {
-      expression: `(() => {
-        const backdrop = document.getElementById("chart-modal-backdrop");
-        const style = window.getComputedStyle(backdrop);
-        return {
-          isOpen: backdrop.classList.contains("open"),
-          opacity: style.opacity,
-          visibility: style.visibility
-        };
-      })()`,
-      returnByValue: true
-    });
-    const cardRes = evalCard.result.value || {};
+    // Wait for transition (0.28s cubic-bezier); poll up to 3s so a cold headless start is not flaky
+    let cardRes = {};
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 200));
+      const evalCard = await send("Runtime.evaluate", {
+        expression: `(() => {
+          const backdrop = document.getElementById("chart-modal-backdrop");
+          const style = window.getComputedStyle(backdrop);
+          return {
+            isOpen: backdrop.classList.contains("open"),
+            opacity: style.opacity,
+            visibility: style.visibility
+          };
+        })()`,
+        returnByValue: true
+      });
+      cardRes = evalCard.result.value || {};
+      if (cardRes.isOpen && cardRes.opacity === "1" && cardRes.visibility === "visible") break;
+    }
     if (!cardRes.isOpen || cardRes.opacity !== "1" || cardRes.visibility !== "visible") {
       throw new Error("Chart modal failed to open with visible class: " + JSON.stringify(cardRes));
     }
     console.log("PASS: Card click opens high-precision chart modal (opacity: 1, visibility: visible)");
+
+    // Range tabs: each click must make exactly that tab active (aria-selected) and keep the modal open
+    for (const rk of ["7d", "30d", "all", "24h"]) {
+      await send("Runtime.evaluate", {
+        expression: `(() => { const b = document.getElementById("range-btn-${rk}"); if (b) b.click(); })()`
+      });
+      await new Promise(r => setTimeout(r, 900));
+      const evalTab = await send("Runtime.evaluate", {
+        expression: `(() => {
+          const active = [...document.querySelectorAll("#modal-range-tabs .modal-range-btn")]
+            .filter(b => b.classList.contains("active") && b.getAttribute("aria-selected") === "true")
+            .map(b => b.getAttribute("data-range"));
+          const backdrop = document.getElementById("chart-modal-backdrop");
+          return { active, isOpen: backdrop.classList.contains("open") };
+        })()`,
+        returnByValue: true
+      });
+      const tabRes = evalTab.result.value || {};
+      if (!tabRes.isOpen || JSON.stringify(tabRes.active) !== JSON.stringify([rk])) {
+        throw new Error("Range tab " + rk + " failed to activate: " + JSON.stringify(tabRes));
+      }
+    }
+    console.log("PASS: Modal range tabs 24h / 7d / 30d / all switch cleanly");
 
     // Close chart modal via close button
     const evalClose = await send("Runtime.evaluate", {
@@ -145,6 +191,12 @@ async function runBrowserCheck() {
       throw new Error("CSP violations detected: " + JSON.stringify(cspErrors));
     }
     console.log("PASS: Zero CSP violations detected in browser console");
+
+    // 4. Zero uncaught page exceptions
+    if (exceptions.length > 0) {
+      throw new Error("Uncaught page exceptions: " + JSON.stringify(exceptions.map(e => (e.exception && e.exception.description) || e.text)));
+    }
+    console.log("PASS: Zero uncaught page exceptions");
 
     ws.close();
     console.log("ALL BROWSER INTERACTION AUTOMATED CHECKS PASS");

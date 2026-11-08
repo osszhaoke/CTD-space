@@ -48,7 +48,8 @@ echo "[1/5] Python 环境就绪: $("$PY_BIN" --version) ($PY_BIN)"
 ES_HAS_CRED="$(PYTHONPATH=development/ctds "$PY_BIN" -B -c '
 import json
 try:
-    c = json.load(open("var/ctds-c01/config.json"))
+    with open("var/ctds-c01/config.json", encoding="utf-8") as f:
+        c = json.load(f)
     es = c.get("eight_sleep", {})
     has = bool(es.get("bearer_token") and str(es.get("bearer_token")).strip() and es.get("mode") == "LIVE")
     print("1" if has else "0")
@@ -63,7 +64,8 @@ if [[ "$ES_HAS_CRED" -eq 0 && "$NO_PROMPT" -eq 0 ]]; then
     ES_HAS_CRED="$(PYTHONPATH=development/ctds "$PY_BIN" -B -c '
 import json
 try:
-    c = json.load(open("var/ctds-c01/config.json"))
+    with open("var/ctds-c01/config.json", encoding="utf-8") as f:
+        c = json.load(f)
     es = c.get("eight_sleep", {})
     has = bool(es.get("bearer_token") and str(es.get("bearer_token")).strip() and es.get("mode") == "LIVE")
     print("1" if has else "0")
@@ -134,9 +136,16 @@ with open(p, "rb") as f:
 AG_STATUS="$("$PY_BIN" -B -c '
 import json
 try:
-    c = json.load(open("var/ctds-c01/config.json"))
-    m = c.get("source", {}).get("mode", "SYNTHETIC")
-    print("已绑定 (LIVE)" if m == "LIVE" else "未绑定 (SYNTHETIC)")
+    with open("var/ctds-c01/config.json", encoding="utf-8") as f:
+        c = json.load(f)
+    src = c.get("source", {})
+    m = src.get("mode", "SYNTHETIC")
+    if m == "LIVE":
+        proto = str(src.get("protocol", "http")).upper()
+        cb = " + 云端历史同步" if src.get("cloud_backfill_enabled") else ""
+        print(f"已绑定 (LIVE · {proto}{cb})")
+    else:
+        print("未绑定 (SYNTHETIC)")
 except Exception:
     print("未配置")
 ')"

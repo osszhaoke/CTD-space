@@ -115,7 +115,8 @@ echo "      绑定结果: $BIND_JSON"
 AG_MODE="$("$PY_BIN" -B -c '
 import json
 try:
-    c = json.load(open("var/ctds-c01/config.json"))
+    with open("var/ctds-c01/config.json", encoding="utf-8") as f:
+        c = json.load(f)
     print(c.get("source", {}).get("mode", "SYNTHETIC"))
 except Exception:
     print("SYNTHETIC")
@@ -156,7 +157,8 @@ fi
 ES_HAS_CRED="$("$PY_BIN" -B -c '
 import json
 try:
-    c = json.load(open("var/ctds-c01/config.json"))
+    with open("var/ctds-c01/config.json", encoding="utf-8") as f:
+        c = json.load(f)
     es = c.get("eight_sleep", {})
     has = bool(es.get("bearer_token") or es.get("refresh_token") or (es.get("email") and es.get("password")))
     print("1" if has else "0")
@@ -175,6 +177,9 @@ if [[ "$ES_HAS_CRED" -eq 1 ]]; then
   elif echo "$CHECK_RES" | grep -q '"outcome": "NO_CONNECTION"'; then
     echo "      Eight Sleep: 网络不可达，服务启动后会自动重试。"
     ES_DISPLAY_STATUS="网络离线（自动重试）"
+  elif echo "$CHECK_RES" | grep -q '"outcome": "HTTP_ERROR"'; then
+    echo "      Eight Sleep: 认证接口临时限流或忙碌，后台将按退避窗口自动恢复。"
+    ES_DISPLAY_STATUS="限流退避（自动恢复）"
   else
     echo "      Eight Sleep: 认证失败。"
     ES_DISPLAY_STATUS="认证失效"
@@ -200,7 +205,8 @@ else
         MODE_NOW="$("$PY_BIN" -B -c '
 import json
 try:
-    c = json.load(open("var/ctds-c01/config.json"))
+    with open("var/ctds-c01/config.json", encoding="utf-8") as f:
+        c = json.load(f)
     print(c.get("eight_sleep", {}).get("mode", "READY"))
 except Exception:
     print("READY")
@@ -320,10 +326,19 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     print("未知（服务未响应）"); sys.exit()
+proto = "http"
+try:
+    with open("var/ctds-c01/config.json", encoding="utf-8") as f:
+        proto = json.load(f).get("source", {}).get("protocol", "http")
+except Exception:
+    pass
+cb_note = " · 云端历史自动同步已启用" if (d.get("cloud_backfill") or {}).get("enabled") else ""
 if d.get("source_mode") != "LIVE":
     print("合成测试数据")
 elif d.get("actual_source_connectivity") == "CONNECTED":
-    print("在线")
+    print(f"在线 ({proto.upper()}){cb_note}")
+elif proto == "mqtt":
+    print(f"MQTT 监听就绪 · 等待传感器周期推送（约 90 秒内自动上线）{cb_note}")
 else:
     print("未发现设备 · 服务将持续自动扫描（设备上线后自动接入）")
 ' 2>/dev/null || echo "未知")"

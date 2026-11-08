@@ -16,8 +16,8 @@ ENV TZ=Asia/Shanghai
 ENV CTDS_LISTEN_HOST=0.0.0.0
 ENV CTDS_IN_CONTAINER=1
 
-# 暴露大屏与数据服务端口
-EXPOSE 8765
+# 暴露大屏与数据服务端口；1883 仅在 AirGradient ONE 8PSL 本地 MQTT 只读监听模式（source.protocol=mqtt）下使用
+EXPOSE 8765 1883
 
 # 挂载卷：持久化配置与 SQLite 数据库
 VOLUME ["/app/var"]

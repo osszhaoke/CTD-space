@@ -21,6 +21,8 @@ BUNDLE_ROOT = "StarMap-C01-Mac"
 EXCLUDED_NAMES = frozenset({"index.html", "app.js", "style.css"})
 
 ROOT_LAUNCHERS = (
+    "启动CTDS.command",
+    "启动StarMap.command",
     "一键部署_StarMap.command",
     "一键部署_StarMap_局域网共享.command",
     "一键打包_StarMap.command",
@@ -42,7 +44,7 @@ def bundle_config_bytes(cfg_path: Path) -> bytes:
     src = doc.get("source")
     if isinstance(src, dict) and src.get("mode") != "LIVE":
         src["mode"] = "LIVE"
-        if not src.get("base_url"):
+        if not src.get("base_url") and src.get("protocol", "http") == "http":
             src["base_url"] = "http://192.0.2.10"   # RFC 5737 placeholder; replaced by auto-discovery
     return (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
@@ -52,26 +54,33 @@ def make_private_readme(cfg_path: Path) -> str:
     if cfg_path.is_file():
         try:
             data = json.loads(cfg_path.read_text(encoding="utf-8"))
-            es = data.get("eight_sleep", {})
-            has_bound = bool(es.get("bearer_token") and str(es.get("bearer_token")).strip() and es.get("mode") == "LIVE")
+            es = data.get("eight_sleep", {}) or {}
+            src = data.get("source", {}) or {}
+            has_es = bool(es.get("bearer_token") and str(es.get("bearer_token")).strip() and es.get("mode") == "LIVE")
+            has_ag_secret = bool(
+                (src.get("cloud_api_token") and str(src.get("cloud_api_token")).strip())
+                or (src.get("mqtt_password") and str(src.get("mqtt_password")).strip())
+            )
+            has_bound = has_es or has_ag_secret
         except Exception:
             has_bound = False
 
     if has_bound:
         return """# 私密现场交付与迁移包说明
 
-本包包含已鉴权的 Eight Sleep 账号凭据与本地历史数据库，专供目标 Mac 现场一键部署与接续运行。
-**含已鉴权凭据与生理数据 · 勿外发**
+本包包含已鉴权的服务凭据（Eight Sleep / AirGradient 云端历史同步令牌）与本地历史数据库，专供目标 Mac 现场一键部署与接续运行。
+**含已鉴权凭据与私密时序数据 · 勿外发**
 
 - 规范基线：CTDS-C01 方案 B 授权落档
-- 适用范围：目标 Mac 本地环回部署，自动发现并接入 AirGradient 与 Eight Sleep，解压即能持续采集并展示生理时序。
+- 适用范围：目标 Mac 本地环回部署，兼容 AirGradient 本地 HTTP 自动发现（9PSL）与本地 MQTT `:1883` 实时推送 + 云端历史自动回填（8PSL），以及 Eight Sleep 床体微环境只读接入。
 - 权限说明：var/ctds-c01/config.json 包含凭据，已设为 600 权限，严禁公开发布。
 
 ## 目标 Mac 一键部署步骤
 1. 用 AirDrop 或 U 盘把本 zip 拷到目标 Mac，双击解压（目标机需 Python 3.9+，已装 3.10+ 即可）。
 2. 首次打开：在解压出的文件夹里 **右键「一键部署_StarMap.command」→ 打开 → 再点「打开」**（macOS 会拦截从其他设备传来的脚本，只需这一次）。
-3. 脚本自动完成：扫描当前网段并接入 AirGradient（找不到会提示手动输入设备 IP，可留空跳过）→ 用包内已保存的凭据静默接入 Eight Sleep（凭据失效时会提示重新输入）→ 运行自检 → 启动服务并打开 http://127.0.0.1:8765/ 。
-4. 屏幕上顶部徽章显示"每 60 秒采集 · 在线"与"Pod 6 · 实时在线"即为接入成功。
+3. 脚本自动完成：校验/发现 AirGradient 连接（MQTT 模式直接监听 `:1883` 并自动同步云端历史；HTTP 模式自动扫描网段）→ 用包内已保存的凭据静默校验 Eight Sleep（失效时会提示重新输入）→ 运行自检 → 启动服务并打开 http://127.0.0.1:8765/ 。
+4. 大屏实时读数刷新且弹窗支持 `24小时 / 7天 / 30天 / 全量历史` 切换即为运行就绪。
+5. 日常使用：直接双击 **「启动CTDS.command」**（或「启动StarMap.command」），后台静默搜集数据并秒开大屏；关闭窗口或浏览器不会中断采集。
 
 ## 故障排查与连通性诊断
 若目标 Mac 遇到 Eight Sleep 离线或网络故障：
@@ -81,7 +90,7 @@ def make_private_readme(cfg_path: Path) -> str:
 - 右键诊断报告 -> 共享 -> 隔空投送 (AirDrop) 发回即可迅速定位原因。
 
 ## 注意
-- AirGradient 与目标 Mac 需在同一局域网（同网段、路由器未开启 AP/客户端隔离），且设备已开启本地 API。
+- AirGradient 与目标 Mac 需在同一局域网（同网段、路由器未开启 AP/客户端隔离）；若使用 8PSL MQTT 模式，若目标 Mac 局域网 IP 变化，请在 AirGradient Dashboard 中将 MQTT Broker URL 更新为新 Mac 的 IP。
 - 迁移完成后请删除中转用的 zip 副本；不要上传网盘、聊天工具或提交 Git。
 """
     else:
@@ -99,6 +108,7 @@ def make_private_readme(cfg_path: Path) -> str:
 2. 首次打开：在解压出的文件夹里 **右键「一键部署_StarMap.command」→ 打开 → 再点「打开」**（macOS 会拦截从其他设备传来的脚本，只需这一次）。
 3. 脚本自动完成：扫描当前网段并接入 AirGradient（找不到会提示手动输入设备 IP，可留空跳过）→ 用包内已保存的凭据静默接入 Eight Sleep（凭据失效时会提示重新输入）→ 运行自检 → 启动服务并打开 http://127.0.0.1:8765/ 。
 4. 屏幕上顶部徽章显示"每 60 秒采集 · 在线"与"Pod 6 · 实时在线"即为接入成功。
+5. 日常使用：直接双击 **「启动CTDS.command」**（或「启动StarMap.command」），后台静默搜集数据并秒开大屏；关闭窗口或浏览器不会中断采集。
 
 ## 故障排查与连通性诊断
 若目标 Mac 遇到 Eight Sleep 离线或网络故障：
@@ -141,6 +151,7 @@ SEED_CONFIG = {
 
 def _write_exec_info(arcname: str, mode: int = 0o755) -> zipfile.ZipInfo:
     zi = zipfile.ZipInfo(arcname)
+    zi.create_system = 3  # Unix (ensures macOS unzip & Archive Utility restore POSIX permissions)
     zi.external_attr = (stat.S_IFREG | mode) << 16
     zi.compress_type = zipfile.ZIP_DEFLATED
     return zi
@@ -181,6 +192,7 @@ def build_bundle(out_zip: Path = None) -> dict:
                 include_paths.append(p.relative_to(ROOT))
 
     for extra in (
+        Path("delivery/scripts/service_control.py"),
         Path("delivery/scripts/deploy_mac.sh"),
         Path("delivery/scripts/package_mac.sh"),
         Path("delivery/scripts/diag_eight_sleep.py"),

@@ -70,9 +70,11 @@ def mask_email(email: str) -> str:
     return f"{masked_name}@{domain}"
 
 def mask_log_line(line: str) -> str:
-    # 遮蔽 Bearer token、密码、邮箱、UUID（不泄露完整邮箱前缀或完整 36 位 UUID）
+    # 遮蔽 Bearer token、密码、AirGradient token/locationId、邮箱、UUID（不泄露完整邮箱前缀或完整 36 位 UUID）
     line = re.sub(r"Bearer\s+[a-zA-Z0-9_\-\.]{20,}", "Bearer [MASKED_TOKEN]", line)
-    line = re.sub(r'("password"\s*:\s*")[^"]+(")', r'\1[MASKED]\2', line)
+    line = re.sub(r'("(?:password|cloud_api_token|mqtt_password)"\s*:\s*")[^"]+(")', r'\1[MASKED]\2', line)
+    line = re.sub(r"(token=)[^&\s]+", r"\1[MASKED]", line, flags=re.IGNORECASE)
+    line = re.sub(r"(/locations/)\d+", r"\1[MASKED_LOC]", line, flags=re.IGNORECASE)
     line = re.sub(
         r"([a-zA-Z0-9_.+-]+)@([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)",
         lambda m: mask_email(m.group(0)),
