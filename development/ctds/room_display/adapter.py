@@ -168,29 +168,49 @@ def _classify(raw, present, rng):
     return "OBSERVED", float(raw)
 
 
-def normalize(body, *, source_id, room_id, attempt_id, received_at, provenance):
+def normalize(body, *, source_id, room_id, attempt_id, received_at, provenance,
+              mapping_version=None, event_identity=None, provider_observed_at=None):
     """Map one response body to allowlisted observations. Raises AdapterError on bad payload."""
     if provenance not in PROVENANCES:
         raise AdapterError("INVALID_PROVENANCE")
-    doc = strict_json(body)
+    eff_mapping = catalog.MAPPING_VERSION if mapping_version is None else mapping_version
+    if eff_mapping not in (catalog.MAPPING_VERSION, catalog.MQTT_MAPPING_VERSION, catalog.CLOUD_MAPPING_VERSION):
+        raise AdapterError("INVALID_MAPPING_VERSION")
+    doc = strict_json(body) if isinstance(body, (bytes, bytearray, str)) else body
     if type(doc) is not dict:
         raise AdapterError("INVALID_PAYLOAD", "top-level object required")
+    v2_mappings = (catalog.MQTT_MAPPING_VERSION, catalog.CLOUD_MAPPING_VERSION)
+    metrics_table = catalog.ALL_AG_METRICS if eff_mapping in v2_mappings else catalog.METRICS
+    src_identity = event_identity if event_identity is not None else attempt_id
+    if provider_observed_at is None:
+        obs_iso, time_basis = None, "RECEIPT_ONLY"
+    else:
+        obs_iso = iso(provider_observed_at) if isinstance(provider_observed_at, dt.datetime) else str(provider_observed_at)
+        time_basis = "PROVIDER_OBSERVED"
+    raw_bytes = body if isinstance(body, (bytes, bytearray)) else canonical(doc)
     observations = []
-    for metric_id, m in catalog.METRICS.items():
-        status, value = _classify(doc.get(m["field"]), m["field"] in doc, m["range"])
+    for metric_id, m in metrics_table.items():
+        field = m["field"]
+        present = field in doc
+        raw_val = doc.get(field)
+        # Cloud API calls compensated PM2.5 `pm02_corrected`; keep strictly in pm2_5_compensated (never in raw pm2_5).
+        if eff_mapping == catalog.CLOUD_MAPPING_VERSION and metric_id == "pm2_5_compensated" and not present and "pm02_corrected" in doc:
+            present = True
+            raw_val = doc.get("pm02_corrected")
+        status, value = _classify(raw_val, present, m["range"])
         observations.append({
-            "event_id": sha256_hex(f"{source_id}|{attempt_id}|{metric_id}"),
+            "event_id": sha256_hex(f"{source_id}|{src_identity}|{metric_id}"),
             "source_id": source_id,
             "room_id": room_id,
             "metric_id": metric_id,
             "value_status": status,
             "value": value,
             "unit": m["unit"],
-            "provider_observed_at": None,
+            "provider_observed_at": obs_iso,
             "gateway_received_at": iso(received_at),
-            "time_basis": "RECEIPT_ONLY",
-            "mapping_version": catalog.MAPPING_VERSION,
+            "time_basis": time_basis,
+            "mapping_version": eff_mapping,
             "data_provenance": provenance,
-            "source_event_identity": attempt_id,
+            "source_event_identity": src_identity,
         })
-    return observations, sha256_hex(body)
+    return observations, sha256_hex(raw_bytes)

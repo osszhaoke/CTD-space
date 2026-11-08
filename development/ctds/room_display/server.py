@@ -45,13 +45,13 @@ def validate_fields_patch(doc):
     if type(doc) is not dict or set(doc) != {"fields"} or type(doc["fields"]) is not list:
         raise ValueError("body must be {\"fields\": [...]}")
     items, seen = [], set()
-    if not 1 <= len(doc["fields"]) <= len(catalog.METRICS):
+    if not 1 <= len(doc["fields"]) <= len(catalog.ALL_AG_METRICS):
         raise ValueError("fields length out of range")
     for it in doc["fields"]:
         if type(it) is not dict or set(it) != {"metric_id", "enabled", "display_order", "label_zh"}:
             raise ValueError("each field needs exactly metric_id/enabled/display_order/label_zh")
         mid = it["metric_id"]
-        if mid not in catalog.METRICS or mid in seen:
+        if mid not in catalog.ALL_AG_METRICS or mid in seen:
             raise ValueError("metric_id not allowlisted or duplicated")
         seen.add(mid)
         if type(it["enabled"]) is not bool:
@@ -203,6 +203,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, projection.build_display(app.store, app.cfg))
             if path in (f"/api/v1/rooms/{app.cfg['room_id']}/series", f"/api/v1/rooms/{app.cfg['room_id']}/timeline"):
                 query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                if path.endswith("/series") and "range" in query:
+                    range_val = (query.get("range") or [""])[0]
+                    if range_val not in projection.SERIES_RANGES:
+                        return self._send(400, {"error": "INVALID_RANGE"})
+                    metric = (query.get("metric") or [""])[0]
+                    if metric not in projection.history_metric_ids(app.cfg):
+                        return self._send(400, {"error": "METRIC_NOT_ALLOWED"})
+                    return self._send(200, projection.build_series(app.store, app.cfg, metric, range_key=range_val))
                 hours_raw = (query.get("hours") or ["24"])[0]
                 if not HOURS_RE.fullmatch(hours_raw) or not 1 <= int(hours_raw) <= projection.HISTORY_MAX_HOURS:
                     return self._send(400, {"error": "INVALID_HOURS"})
@@ -216,8 +224,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "ROOM_NOT_FOUND"})
             if path == "/api/v1/sources/capabilities":
                 verified = app.store.verified_metrics(app.cfg["source"]["source_id"])
-                return self._send(200, {"airgradient": catalog.capabilities(verified),
-                                        "pod5": catalog.POD5_DESCRIPTOR, "doc_ref": catalog.DOC_REF})
+                is_mqtt = app.cfg["source"].get("protocol", "http") == "mqtt"
+                doc_ref = catalog.MQTT_DOC_REF if is_mqtt else catalog.DOC_REF
+                # /admin lists every display_settings row (incl. legacy tvoc_ppb); always describe all of them so
+                # no row renders without a unit. Availability stays DOC_ONLY until a LIVE observation proves it.
+                return self._send(200, {"airgradient": catalog.capabilities(verified, include_legacy=True),
+                                        "pod5": catalog.POD5_DESCRIPTOR, "doc_ref": doc_ref})
             if path == "/api/v1/admin/display-fields":
                 return self._send(200, {"room_id": app.cfg["room_id"],
                                         "config_revision": app.store.config_revision(app.cfg["room_id"]),

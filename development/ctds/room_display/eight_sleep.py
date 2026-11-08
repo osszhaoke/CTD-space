@@ -368,6 +368,19 @@ def normalize_bundle(trends_doc, temp_doc, device_doc, *, source_id, room_id, at
     return observations, payload_sha, extracted["meta"]
 
 
+def _parse_retry_after(headers):
+    if not headers:
+        return None
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        val = int(str(raw).strip())
+        return val if val > 0 else None
+    except ValueError:
+        return None
+
+
 class EightSleepClient:
     """Eight Sleep read-only API client with token auto-refresh and password re-auth."""
 
@@ -424,11 +437,16 @@ class EightSleepClient:
         self.ssl_context = adapter.get_ssl_context()
 
     @classmethod
-    def from_config(cls, es_cfg, clock=adapter.utc_now, config_path=None):
+    def from_config(cls, es_cfg, clock=adapter.utc_now, config_path=None, target_cfg=None):
         if not isinstance(es_cfg, dict):
             es_cfg = {}
 
         def _persist_callback(auth_state):
+            es_cfg.update(auth_state)
+            if isinstance(target_cfg, dict):
+                es_target = target_cfg.get("eight_sleep")
+                if isinstance(es_target, dict):
+                    es_target.update(auth_state)
             if config_path:
                 try:
                     p = Path(config_path)
@@ -507,10 +525,16 @@ class EightSleepClient:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             code = exc.code
+            retry_after = _parse_retry_after(getattr(exc, "headers", None))
             exc.close()
             if code in (401, 403):
-                raise adapter.AdapterError("AUTH_REJECTED", f"Authentication failed: HTTP {code}") from exc
-            raise adapter.AdapterError("HTTP_ERROR", f"Auth HTTP error: {code}") from exc
+                err = adapter.AdapterError("AUTH_REJECTED", f"Authentication failed: HTTP {code}")
+            else:
+                err = adapter.AdapterError("HTTP_ERROR", f"Auth HTTP error: {code}")
+            err.http_status = code
+            if retry_after is not None:
+                err.retry_after_s = retry_after
+            raise err from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise adapter.AdapterError("NO_CONNECTION", f"Auth network error: {exc}") from exc
 
@@ -578,8 +602,21 @@ class EightSleepClient:
                         self.on_token_refreshed(self.get_auth_state())
                     return self.bearer_token
             except urllib.error.HTTPError as exc:
+                code = exc.code
+                retry_after = _parse_retry_after(getattr(exc, "headers", None))
                 exc.close()
-                _log.warning("Eight Sleep token refresh failed: HTTPError")
+                _log.warning("Eight Sleep token refresh failed: HTTP %s", code)
+                if code == 429 or code >= 500:
+                    err = adapter.AdapterError("HTTP_ERROR", f"Refresh HTTP error: {code}")
+                    err.http_status = code
+                    if retry_after is not None:
+                        err.retry_after_s = retry_after
+                    raise err from exc
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                _log.warning(
+                    "Eight Sleep token refresh network error: %s", type(exc).__name__
+                )
+                raise adapter.AdapterError("NO_CONNECTION", f"Refresh network error: {type(exc).__name__}") from exc
             except Exception as exc:
                 _log.warning(
                     "Eight Sleep token refresh failed: %s", type(exc).__name__
@@ -728,6 +765,7 @@ class EightSleepClient:
             return {
                 "outcome": exc.code,
                 "http_status": getattr(exc, "http_status", None) or (401 if exc.code == "AUTH_REJECTED" else None),
+                "retry_after_s": getattr(exc, "retry_after_s", None),
                 "request_started_at": start_t,
                 "response_received_at": self.clock(),
                 "side": self.side,
@@ -794,7 +832,7 @@ def make_synthetic_bundle(clock=adapter.utc_now, step_idx=0):
     }
 
 
-def ingest_once(store, cfg, *, client=None, provenance=None, clock=adapter.utc_now, config_path=None):
+def ingest_once(store, cfg, *, client=None, provenance=None, clock=adapter.utc_now, config_path=None, out_meta=None):
     """Run one Eight Sleep collection attempt and persist observations into Store."""
     es_cfg = dict(DEFAULT_ES_CONFIG)
     if isinstance(cfg.get("eight_sleep"), dict):
@@ -819,10 +857,16 @@ def ingest_once(store, cfg, *, client=None, provenance=None, clock=adapter.utc_n
     if client is not None:
         res = client.fetch_bundle()
     elif mode == "LIVE":
-        client_inst = EightSleepClient.from_config(es_cfg, clock=clock, config_path=config_path)
+        client_inst = EightSleepClient.from_config(
+            es_cfg, clock=clock, config_path=config_path, target_cfg=cfg,
+        )
         res = client_inst.fetch_bundle()
     else:
         res = make_synthetic_bundle(clock=clock)
+
+    if isinstance(out_meta, dict):
+        out_meta["http_status"] = res.get("http_status")
+        out_meta["retry_after_s"] = res.get("retry_after_s")
 
     outcome = res["outcome"]
     observations = []

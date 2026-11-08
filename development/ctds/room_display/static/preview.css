@@ -1086,6 +1086,74 @@
       gap: 8px;
     }
 
+    .modal-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .modal-range-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      background: rgba(8, 24, 15, 0.48);
+      border: 1px solid var(--card-border-subtle);
+      border-radius: 999px;
+    }
+
+    .modal-range-btn {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: clamp(12px, 0.78vw, 15px);
+      font-weight: 500;
+      padding: clamp(5px, 0.35vw, 8px) clamp(11px, 0.8vw, 16px);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .modal-range-btn:hover {
+      color: var(--text-primary);
+      background: rgba(229, 211, 179, 0.08);
+    }
+
+    .modal-range-btn.active {
+      color: #102819;
+      background: linear-gradient(135deg, #F3E5C8 0%, #D9B87C 100%);
+      border-color: rgba(255, 247, 235, 0.45);
+      font-weight: 600;
+      box-shadow: 0 2px 10px rgba(217, 184, 124, 0.28);
+    }
+
+    [data-theme="light"] .modal-range-tabs {
+      background: rgba(24, 57, 34, 0.06);
+      border-color: rgba(24, 57, 34, 0.14);
+    }
+
+    [data-theme="light"] .modal-range-btn {
+      color: #466350;
+    }
+
+    [data-theme="light"] .modal-range-btn:hover {
+      color: #14301D;
+      background: rgba(24, 57, 34, 0.06);
+    }
+
+    [data-theme="light"] .modal-range-btn.active {
+      color: #FFFFFF;
+      background: linear-gradient(135deg, #234E33 0%, #163622 100%);
+      border-color: rgba(24, 57, 34, 0.3);
+      box-shadow: 0 2px 8px rgba(22, 54, 34, 0.22);
+    }
+
     .modal-close-btn {
       background: var(--pill-bg);
       border: 1px solid var(--card-border);

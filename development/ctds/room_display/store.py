@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS observation (
   source_event_identity TEXT, revision INTEGER NOT NULL DEFAULT 1,
   CHECK ((value_status = 'OBSERVED') = (value IS NOT NULL)));
 CREATE INDEX IF NOT EXISTS ix_obs_room_metric_time ON observation(room_id, metric_id, gateway_received_at);
+CREATE INDEX IF NOT EXISTS ix_obs_room_metric_efftime ON observation(
+  room_id, metric_id,
+  (CASE WHEN provider_observed_at IS NOT NULL AND metric_id NOT LIKE 'pod_%' THEN provider_observed_at ELSE gateway_received_at END)
+);
 CREATE TABLE IF NOT EXISTS display_settings (
   room_id TEXT NOT NULL, metric_id TEXT NOT NULL, enabled INTEGER NOT NULL, display_order INTEGER NOT NULL,
   label_zh TEXT NOT NULL, config_revision INTEGER NOT NULL, local_operator_action TEXT NOT NULL,
@@ -48,6 +52,14 @@ CREATE TRIGGER IF NOT EXISTS no_delete_attempt BEFORE DELETE ON ingestion_attemp
 OBS_COLS = ("event_id", "source_id", "room_id", "metric_id", "value_status", "value", "unit",
             "provider_observed_at", "gateway_received_at", "time_basis", "mapping_version",
             "data_provenance", "source_event_identity")
+
+# Effective timeline coordinate: for AirGradient historical backfill, provider_observed_at holds the real
+# measurement UTC timestamp while gateway_received_at preserves local receipt time; Pod metrics keep existing
+# gateway_received_at semantics so nightly session summaries remain aligned with poll windows.
+EFF_TIME_EXPR = (
+    "CASE WHEN provider_observed_at IS NOT NULL AND metric_id NOT LIKE 'pod_%' "
+    "THEN provider_observed_at ELSE gateway_received_at END"
+)
 
 
 class Store:
@@ -140,15 +152,17 @@ class Store:
     def _prov(provenance):
         return (" AND data_provenance=?", (provenance,)) if provenance else ("", ())
 
-    def latest_attempt(self, source_id, *, provenance=None):
+    def latest_attempt(self, source_id, *, provenance=None, exclude_cloud=False):
         extra, args = self._prov(provenance)
-        rows = self._q(f"SELECT * FROM ingestion_attempt WHERE source_id=?{extra} "
+        cextra = " AND outcome NOT LIKE 'CLOUD_%'" if exclude_cloud else ""
+        rows = self._q(f"SELECT * FROM ingestion_attempt WHERE source_id=?{extra}{cextra} "
                        "ORDER BY request_started_at DESC, rowid DESC LIMIT 1", (source_id, *args))
         return dict(rows[0]) if rows else None
 
     def last_success(self, source_id, *, provenance=None):
         extra, args = self._prov(provenance)
-        rows = self._q(f"SELECT * FROM ingestion_attempt WHERE source_id=? AND outcome='OK'{extra} "
+        rows = self._q(f"SELECT * FROM ingestion_attempt WHERE source_id=? "
+                       f"AND outcome IN ('OK','MQTT_OK','MQTT_DUPLICATE'){extra} "
                        "ORDER BY request_started_at DESC, rowid DESC LIMIT 1", (source_id, *args))
         return dict(rows[0]) if rows else None
 
@@ -160,15 +174,57 @@ class Store:
         extra = " AND value_status='OBSERVED'" if observed_only else ""
         pextra, args = self._prov(provenance)
         rows = self._q(f"SELECT * FROM observation WHERE room_id=? AND metric_id=?{extra}{pextra} "
-                       "ORDER BY gateway_received_at DESC, rowid DESC LIMIT 1", (room_id, metric_id, *args))
+                       f"ORDER BY ({EFF_TIME_EXPR}) DESC, rowid DESC LIMIT 1", (room_id, metric_id, *args))
         return dict(rows[0]) if rows else None
 
     def series(self, room_id, metric_id, since_iso, limit=720, *, provenance=None):
         pextra, args = self._prov(provenance)
-        rows = self._q("SELECT gateway_received_at AS t, value, data_provenance FROM observation "
-                       f"WHERE room_id=? AND metric_id=? AND value_status='OBSERVED' AND gateway_received_at>=?{pextra} "
-                       "ORDER BY gateway_received_at DESC LIMIT ?", (room_id, metric_id, since_iso, *args, limit))
+        if limit is None:
+            rows = self._q(
+                f"SELECT ({EFF_TIME_EXPR}) AS t, value, data_provenance FROM observation "
+                f"WHERE room_id=? AND metric_id=? AND value_status='OBSERVED' AND ({EFF_TIME_EXPR})>=?{pextra} "
+                f"ORDER BY ({EFF_TIME_EXPR}) ASC, rowid ASC",
+                (room_id, metric_id, since_iso, *args),
+            )
+            return [dict(r) for r in rows]
+        rows = self._q(
+            f"SELECT ({EFF_TIME_EXPR}) AS t, value, data_provenance FROM observation "
+            f"WHERE room_id=? AND metric_id=? AND value_status='OBSERVED' AND ({EFF_TIME_EXPR})>=?{pextra} "
+            f"ORDER BY ({EFF_TIME_EXPR}) DESC, rowid DESC LIMIT ?",
+            (room_id, metric_id, since_iso, *args, limit),
+        )
         return [dict(r) for r in reversed(rows)]
+
+    def series_bounds(self, room_id, metric_id, *, provenance=None):
+        pextra, args = self._prov(provenance)
+        row = self._q(
+            f"SELECT COUNT(*), MIN({EFF_TIME_EXPR}), MAX({EFF_TIME_EXPR}) FROM observation "
+            f"WHERE room_id=? AND metric_id=? AND value_status='OBSERVED'{pextra}",
+            (room_id, metric_id, *args),
+        )[0]
+        return {"count": int(row[0] or 0), "min_t": row[1], "max_t": row[2]}
+
+    def local_receipt_timestamps_in_range(self, room_id, metric_id, start_iso, end_iso, *, provenance="LIVE"):
+        """Return sorted gateway_received_at timestamps of local (RECEIPT_ONLY) observations in [start_iso, end_iso]."""
+        pextra, args = self._prov(provenance)
+        rows = self._q(
+            "SELECT gateway_received_at FROM observation "
+            f"WHERE room_id=? AND metric_id=? AND provider_observed_at IS NULL "
+            f"AND gateway_received_at>=? AND gateway_received_at<=?{pextra} "
+            "ORDER BY gateway_received_at ASC",
+            (room_id, metric_id, start_iso, end_iso, *args),
+        )
+        return [r[0] for r in rows]
+
+    def get_meta(self, key, default=None):
+        rows = self._q("SELECT value FROM meta WHERE key=?", (key,))
+        return rows[0][0] if rows else default
+
+    def set_meta(self, key, value):
+        self._tx(lambda c: c.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(key), str(value)),
+        ))
 
     def verified_metrics(self, source_id):
         return {r[0] for r in self._q("SELECT DISTINCT metric_id FROM observation WHERE source_id=? "
@@ -182,6 +238,13 @@ class Store:
         stored = {r["metric_id"]: dict(r) for r in self._q("SELECT * FROM display_settings WHERE room_id=?", (room_id,))}
         out = []
         for mid, m in catalog.METRICS.items():
+            s = stored.get(mid)
+            out.append({"metric_id": mid,
+                        "enabled": bool(s["enabled"]) if s else m["default"],
+                        "display_order": s["display_order"] if s else m["order"],
+                        "label_zh": s["label_zh"] if s else m["label_zh"],
+                        "config_revision": s["config_revision"] if s else 0})
+        for mid, m in catalog.LEGACY_METRICS.items():
             s = stored.get(mid)
             out.append({"metric_id": mid,
                         "enabled": bool(s["enabled"]) if s else m["default"],

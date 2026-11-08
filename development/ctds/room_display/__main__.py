@@ -1,15 +1,17 @@
 """CLI: python3 -m room_display (with PYTHONPATH=development/ctds) <command>.
 
 Commands:
-  init-config       write a SYNTHETIC template to var/ctds-c01/config.json if absent (never overwrites)
-  auto-bind         discover AirGradient on LAN, self-update config.json, and collect if online
-  bind-eight-sleep  authenticate and bind Eight Sleep Pod 6 (LIVE/READY/SYNTHETIC)
-  migrate-config    normalize config formatting (Solo side alignment) and enforce 0600 permissions
-  self-test         run full automated test suite and live/offline cockpit verification
-  run               collector + loopback display server in one process (Ctrl-C / SIGTERM stops cleanly)
-  serve             display server only (read existing DB)
-  collect-once      one read round; prints outcome and status counts only (no values/address)
-  status            print row counts and latest attempt outcome
+  init-config             write a SYNTHETIC template to var/ctds-c01/config.json if absent (never overwrites)
+  auto-bind               discover AirGradient on LAN, self-update config.json, and collect if online
+  bind-eight-sleep        authenticate and bind Eight Sleep Pod 6 (LIVE/READY/SYNTHETIC)
+  bind-airgradient-cloud  configure or check AirGradient Cloud API v1 historical backfill credentials
+  sync-cloud-history      run one resumable AirGradient Cloud historical backfill & gap-heal pass
+  migrate-config          normalize config formatting (Solo side alignment) and enforce 0600 permissions
+  self-test               run full automated test suite and live/offline cockpit verification
+  run                     collector + loopback display server in one process (Ctrl-C / SIGTERM stops cleanly)
+  serve                   display server only (read existing DB)
+  collect-once            one read round; prints outcome and status counts only (no values/address)
+  status                  print row counts, latest attempt outcome, and cloud backfill state
 """
 import argparse
 import hashlib
@@ -23,7 +25,7 @@ import threading
 import unittest
 import urllib.error
 
-from . import adapter, catalog, collector, config, discover, eight_sleep, projection, server
+from . import adapter, catalog, cloud_backfill, collector, config, discover, eight_sleep, projection, server
 from .store import Store
 
 
@@ -110,17 +112,14 @@ def cmd_bind_eight_sleep(args):
             return 1
         try:
             client = eight_sleep.EightSleepClient.from_config(es, config_path=None)
-            user_id = None
-            device_id = None
-            if client.bearer_token:
-                try:
-                    user_id, device_id = client.discover()
-                except Exception:
-                    client.refresh_auth()
-                    user_id, device_id = client.discover()
-            else:
-                client.authenticate()
-                user_id, device_id = client.discover()
+            me_doc = client._get(f"{client.base_url}/users/me", retry_401=True, label="users/me")
+            u = (me_doc.get("user") if isinstance(me_doc, dict) else None) or (me_doc if isinstance(me_doc, dict) else {})
+            if not client.user_id:
+                client.user_id = u.get("userId") or u.get("id")
+            if not client.device_id:
+                devs = u.get("devices") or []
+                client.device_id = u.get("currentDeviceId") or (devs[0] if devs else None)
+            user_id, device_id = client.discover()
             device_ok = bool(user_id and device_id)
             print(json.dumps({"authenticated": True, "device_ok": device_ok, "outcome": "OK"}, ensure_ascii=False))
             return 0
@@ -377,17 +376,115 @@ def cmd_run(args, cfg, serve_only=False, cfg_path=None):
 def cmd_collect_once(args, cfg, cfg_path=None):
     store = _open(cfg)
     collector.register(store, cfg)
-    outcome = collector.Collector(store, cfg, config_path=cfg_path).round()
-    last = store.latest_attempt(cfg["source"]["source_id"])
+    col = collector.Collector(store, cfg, config_path=cfg_path)
+    wait_s = getattr(args, "wait_seconds", None)
+    outcome = col.round(mqtt_wait_s=wait_s) if col.is_mqtt_live else col.round()
+    last = store.latest_attempt(cfg["source"]["source_id"], exclude_cloud=True)
     metric_status = {}
-    if outcome == "OK":
-        for mid in catalog.METRICS:
+    metrics_map = catalog.ALL_AG_METRICS if col.is_mqtt_live else catalog.METRICS
+    if outcome in ("OK", "MQTT_OK"):
+        for mid in metrics_map:
             o = store.latest_observation(cfg["room_id"], mid)
             metric_status[mid] = o["value_status"] if o else None
-    print(json.dumps({"mode": cfg["source"]["mode"], "outcome": outcome, "http_status": last["http_status"],
+    print(json.dumps({"mode": cfg["source"]["mode"], "protocol": cfg["source"].get("protocol", "http"),
+                      "outcome": outcome, "http_status": last["http_status"] if last else None,
                       "metric_status": metric_status, "counts": store.counts()}, ensure_ascii=False))
     store.close()
-    return 0 if outcome == "OK" else 2
+    return 0 if outcome in ("OK", "MQTT_OK") else 2
+
+
+def cmd_bind_airgradient_cloud(args):
+    cfg_path = config.resolve_path(args.config) if args.config else config.DEFAULT_CONFIG
+    if cfg_path.exists():
+        cfg = config.load(cfg_path)
+    else:
+        cfg = dict(
+            config.DEFAULTS,
+            source=dict(config.DEFAULTS["source"]),
+            eight_sleep=dict(config.DEFAULTS["eight_sleep"]),
+        )
+    src = cfg["source"]
+
+    if getattr(args, "check", False):
+        if not src.get("cloud_location_id") or not src.get("cloud_api_token"):
+            print(json.dumps({"enabled": bool(src.get("cloud_backfill_enabled")), "ok": False, "outcome": "NO_CREDENTIALS"}, ensure_ascii=False))
+            return 1
+        client = cloud_backfill.AirGradientCloudClient(
+            location_id=src["cloud_location_id"],
+            api_token=src["cloud_api_token"],
+            base_url=src.get("cloud_api_base_url") or cloud_backfill.OFFICIAL_CLOUD_BASE_URL,
+        )
+        res = client.check_connectivity()
+        print(json.dumps({"enabled": bool(src.get("cloud_backfill_enabled")), **res}, ensure_ascii=False))
+        return 0 if res["ok"] else 1
+
+    if getattr(args, "disable_cloud", False):
+        src["cloud_backfill_enabled"] = False
+        cfg = config.validate(cfg)
+        config.save_config(cfg, cfg_path)
+        print(json.dumps({"enabled": False, "outcome": "DISABLED"}, ensure_ascii=False))
+        return 0
+
+    import getpass
+    loc_id = (getattr(args, "location_id", None) or "").strip()
+    if not loc_id:
+        try:
+            loc_id = input("请输入 AirGradient Location ID: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消输入。")
+            return 1
+    if getattr(args, "token_stdin", False):
+        token = sys.stdin.read().strip()
+    else:
+        try:
+            token = getpass.getpass("请输入 AirGradient API Token: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消输入。")
+            return 1
+
+    src["cloud_location_id"] = loc_id
+    src["cloud_api_token"] = token
+    src["cloud_backfill_enabled"] = True
+    if getattr(args, "earliest_date", None):
+        src["cloud_earliest_date"] = args.earliest_date.strip()
+    if getattr(args, "cloud_base_url", None):
+        src["cloud_api_base_url"] = args.cloud_base_url.strip()
+    cfg = config.validate(cfg)
+    config.save_config(cfg, cfg_path)
+
+    client = cloud_backfill.AirGradientCloudClient(
+        location_id=src["cloud_location_id"],
+        api_token=src["cloud_api_token"],
+        base_url=src.get("cloud_api_base_url") or cloud_backfill.OFFICIAL_CLOUD_BASE_URL,
+    )
+    probe = client.check_connectivity()
+    print(json.dumps({
+        "enabled": True,
+        "location_id_configured": True,
+        "token_configured": True,
+        **probe,
+    }, ensure_ascii=False))
+    return 0 if probe["ok"] else 2
+
+
+def cmd_sync_cloud_history(args, cfg):
+    store = _open(cfg)
+    collector.register(store, cfg)
+    try:
+        res = cloud_backfill.sync_once(
+            store, cfg, max_past_windows=getattr(args, "max_past_windows", None),
+        )
+        print(json.dumps(res, ensure_ascii=False))
+        return 0
+    except adapter.AdapterError as err:
+        print(json.dumps({
+            "enabled": bool(cfg["source"].get("cloud_backfill_enabled")),
+            "state": "AUTH_REQUIRED" if err.code == "CLOUD_AUTH_REJECTED" else "ERROR",
+            "outcome": err.code,
+        }, ensure_ascii=False))
+        return 2
+    finally:
+        store.close()
 
 
 def cmd_migrate_config(args):
@@ -406,9 +503,10 @@ def cmd_migrate_config(args):
 
 def cmd_status(args, cfg):
     store = _open(cfg)
-    last = store.latest_attempt(cfg["source"]["source_id"])
+    last = store.latest_attempt(cfg["source"]["source_id"], exclude_cloud=True)
     print(json.dumps({"counts": store.counts(), "latest_outcome": last["outcome"] if last else None,
-                      "latest_at": last["request_started_at"] if last else None}, ensure_ascii=False))
+                      "latest_at": last["request_started_at"] if last else None,
+                      "cloud_backfill": projection._cloud_backfill_view(store, cfg)}, ensure_ascii=False))
     store.close()
     return 0
 
@@ -425,11 +523,21 @@ def main(argv=None):
     p.add_argument("--base-url", help="Eight Sleep client API base URL (for testing or proxy)")
     p.add_argument("--auth-url", help="Eight Sleep auth API URL (for testing or proxy)")
     p.add_argument("--check", action="store_true", help="test existing saved credentials without modifying config")
+    p.add_argument("--location-id", help="AirGradient Cloud numeric Location ID")
+    p.add_argument("--token-stdin", action="store_true", help="read AirGradient Cloud API token from stdin")
+    p.add_argument("--earliest-date", help="earliest UTC ISO date for AirGradient Cloud archive scan")
+    p.add_argument("--cloud-base-url", help="AirGradient Cloud API base URL (sandbox testing only)")
+    p.add_argument("--disable-cloud", action="store_true", help="disable AirGradient Cloud historical backfill")
+    p.add_argument("--max-past-windows", type=int, help="limit backward 9-day archive windows in sync-cloud-history")
     p.add_argument("--host", help="listen host (default 127.0.0.1, or 0.0.0.0 for container/LAN)")
     p.add_argument("--lan", "--share-lan", action="store_true", help="allow access from other devices on the same LAN (Wi-Fi)")
+    p.add_argument("--wait-seconds", type=float, help="bounded wait window in seconds for MQTT collect-once")
     p.add_argument(
         "command",
-        choices=["init-config", "auto-bind", "bind-eight-sleep", "migrate-config", "self-test", "run", "serve", "collect-once", "status"],
+        choices=[
+            "init-config", "auto-bind", "bind-eight-sleep", "bind-airgradient-cloud",
+            "sync-cloud-history", "migrate-config", "self-test", "run", "serve", "collect-once", "status",
+        ],
     )
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -440,6 +548,8 @@ def main(argv=None):
         return cmd_auto_bind(args)
     if args.command == "bind-eight-sleep":
         return cmd_bind_eight_sleep(args)
+    if args.command == "bind-airgradient-cloud":
+        return cmd_bind_airgradient_cloud(args)
     if args.command == "migrate-config":
         return cmd_migrate_config(args)
     if args.command == "self-test":
@@ -454,6 +564,8 @@ def main(argv=None):
         return 64
     if getattr(args, "db_path", None):
         cfg["db_path"] = args.db_path
+    if args.command == "sync-cloud-history":
+        return cmd_sync_cloud_history(args, cfg)
     if args.command == "run":
         return cmd_run(args, cfg, cfg_path=cfg_path)
     if args.command == "serve":

@@ -9,6 +9,12 @@
   const TIMELINE_REFRESH_MS = 5 * 60 * 1000;
   const CARD_WINDOW_MS = 60 * 60 * 1000;        // small cards: last 1 hour
   const HISTORY_HOURS = 24;                     // chart modal + timeline: last 24 hours
+  const MODAL_RANGES = {
+    "24h": { key: "24h", hours: 24, label: "近 24 小时" },
+    "7d": { key: "7d", hours: 168, label: "近 7 天" },
+    "30d": { key: "30d", hours: 720, label: "近 30 天" },
+    "all": { key: "all", hours: null, label: "全量历史" },
+  };
   const THEME_KEY = "starmap_space_theme_v1";
   const MODAL_OPEN_CLASS = "open";
   const MODAL_HIDDEN_CLASS = "crosshair-hidden";
@@ -21,6 +27,8 @@
   let toastTimer = null;
   let helpTimer = null;
   let modalSeq = 0;
+  let activeModalKey = null;
+  let activeModalRange = "24h";
   const chartRegistry = new Map();              // svgId -> last render args (re-render on resize)
   let resizeObserver = null;
 
@@ -34,7 +42,7 @@
     { key: "pm25", metaKey: "pm25", metricId: "pm2_5", chart: true, unit: "µg/m³", decimals: 1, evalName: "evaluatePM25" },
     { key: "temp", metaKey: "temp", metricId: "temperature", chart: true, unit: "℃", decimals: 1, evalName: "evaluateTemp" },
     { key: "humidity", metaKey: "humidity", metricId: "humidity", chart: true, unit: "%RH", decimals: 1, evalName: "evaluateHumidity" },
-    { key: "tvoc", metaKey: "tvoc", metricId: "tvoc_index", chart: true, unit: "pt", decimals: 0, evalName: "evaluateTVOC" },
+    { key: "tvoc", metaKey: "tvoc", metricId: "tvoc_ppb", chart: true, unit: "ppb", decimals: 0, evalName: "evaluateTVOC" },
   ];
 
   // Right module (diagonal mirror of the left): row 1 = left/right bed temperature, row 2 = state / night / base.
@@ -80,10 +88,10 @@
       iconSvg: '<path d="M12 3a9.5 9.5 0 0 0-6.5 13.5 7.5 7.5 0 1 0 13 0A9.5 9.5 0 0 0 12 3Z"/>',
     },
     tvoc: {
-      name: "TVOC 挥发物指数",
-      source: "室内空间微气候传感器 · 金属氧化物半导体",
-      desc: "室内总挥发性有机化合物相对活跃度指数（Sensirion 算法）。基线 100 代表该环境的长期平均水平。",
-      baselineLabel: "基线指数 100",
+      name: "TVOC 浓度",
+      source: "室内空间微气候传感器 · 金属氧化物气体探针",
+      desc: "室内总挥发性有机化合物（TVOC）体积浓度。洁净睡眠环境建议控制在 220 ppb 以下；高于 660 ppb 建议开窗通风换气。",
+      baselineLabel: "UBA 优良限值 ≤ 220 ppb",
       iconSvg: '<path d="M3 7c2-1 4-1 6 0s4 1 6 0 4-1 6 0"/><path d="M3 12c2-1 4-1 6 0s4 1 6 0 4-1 6 0"/><path d="M3 17c2-1 4-1 6 0s4 1 6 0 4-1 6 0"/>',
     },
     es_left: {
@@ -164,8 +172,8 @@
 
   function evaluateTVOC(val) {
     if (val == null || isNaN(val)) return "—";
-    if (val <= 100) return "清新无味 · 材质环保安全";
-    if (val <= 200) return "轻度活跃 · 注意空气对流";
+    if (val <= 220) return "清新无味 · 材质环保安全";
+    if (val <= 660) return "轻度活跃 · 注意空气对流";
     return "挥发物超标 · 建议排风散气";
   }
 
@@ -253,6 +261,37 @@
     return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   }
 
+  function formatAxisTime(t, windowMs) {
+    const ms = parseTime(t);
+    if (isNaN(ms)) return "—";
+    const d = new Date(ms);
+    const span = windowMs || 0;
+    if (span <= 36 * 3600 * 1000) {
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+    if (span <= 10 * 24 * 3600 * 1000) {
+      return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+    if (span <= 180 * 24 * 3600 * 1000) {
+      return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    }
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+
+  function formatPointTime(t, windowMs) {
+    const ms = parseTime(t);
+    if (isNaN(ms)) return "—";
+    const d = new Date(ms);
+    const span = windowMs || 0;
+    if (span <= 36 * 3600 * 1000) {
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+    if (span <= 180 * 24 * 3600 * 1000) {
+      return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
   function formatAge(ageS) {
     if (ageS == null) return "";
     if (ageS < 60) return `${ageS} 秒前`;
@@ -294,13 +333,19 @@
   // ----------------------------------------------------
   // 3. Chart geometry (pure) + rendering (pixel space, round dots, time-proportional x)
   // ----------------------------------------------------
-  function inferGapMs(points, pollIntervalS) {
+  function inferGapMs(points, pollIntervalS, windowMs) {
     const ts = (points || []).map((p) => parseTime(p[0])).filter((t) => !isNaN(t)).sort((a, b) => a - b);
     const deltas = [];
     for (let i = 1; i < ts.length; i++) deltas.push(ts[i] - ts[i - 1]);
     deltas.sort((a, b) => a - b);
-    const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : 0;
-    return Math.max(3 * (pollIntervalS || 60) * 1000, 3 * median);
+    const ref = deltas.length ? deltas[Math.floor(deltas.length * 0.7)] : 0;
+    let multiDayFloor = 0;
+    if (typeof windowMs === "number" && windowMs > 24 * 3600 * 1000) {
+      multiDayFloor = windowMs > 7 * 86400 * 1000
+        ? Math.min(3 * 86400 * 1000, Math.max(36 * 3600 * 1000, windowMs / 20))
+        : Math.max(3 * 3600 * 1000, windowMs / 60);
+    }
+    return Math.max(3 * (pollIntervalS || 60) * 1000, 3 * ref, multiDayFloor);
   }
 
   function computeChartGeometry(points, opts) {
@@ -405,7 +450,7 @@
     const axisH = cfg.axisTicks ? 26 : 0;
     const geo = computeChartGeometry(points, {
       width, height, endMs: cfg.endMs, windowMs: cfg.windowMs, padBottom: 6 + axisH,
-      gapMs: inferGapMs(points, cfg.pollIntervalS),
+      gapMs: inferGapMs(points, cfg.pollIntervalS, cfg.windowMs),
       minY: cfg.minY, maxY: cfg.maxY,
     });
     let axis = "";
@@ -415,7 +460,7 @@
         const x = 8 + frac * (width - 16);
         const anchor = i === 0 ? "start" : (i === cfg.axisTicks ? "end" : "middle");
         axis += `<text x="${x.toFixed(1)}" y="${(height - 3).toFixed(1)}" text-anchor="${anchor}" class="trend-axis-text">` +
-          `${formatHHMM(cfg.endMs - cfg.windowMs * (1 - frac))}</text>`;
+          `${formatAxisTime(cfg.endMs - cfg.windowMs * (1 - frac), cfg.windowMs)}</text>`;
       }
     }
 
@@ -468,7 +513,7 @@
       hoverDot.setAttribute("cy", best.y.toFixed(1));
       hoverDot.setAttribute("visibility", "visible");
       if (tip) {
-        tip.textContent = `${formatHHMM(best.t)} · ${cfg.formatValue ? cfg.formatValue(best.v) : `${formatNumber(best.v, cfg.decimals)} ${cfg.unit}`}`;
+        tip.textContent = `${formatPointTime(best.t, cfg.windowMs)} · ${cfg.formatValue ? cfg.formatValue(best.v) : `${formatNumber(best.v, cfg.decimals)} ${cfg.unit}`}`;
         tip.style.display = "block";
         const boxRect = box.getBoundingClientRect();
         const left = Math.max(40, Math.min(boxRect.width - 40, r.left - boxRect.left + best.x));
@@ -893,22 +938,44 @@
   }
 
   // ----------------------------------------------------
-  // 7. Chart modal (24 h series from /series) and help popover
+  // 7. Chart modal (24h / 7d / 30d / all series from /series?range=) and help popover
   // ----------------------------------------------------
   function setText(id, text) {
     const el = $(id);
     if (el) el.textContent = text;
   }
 
-  async function openMetricModal(metaKey) {
+  function syncModalRangeTabs() {
+    const tabsWrap = $("modal-range-tabs");
+    if (!tabsWrap) return;
+    tabsWrap.querySelectorAll(".modal-range-btn[data-range]").forEach((btn) => {
+      const rk = btn.getAttribute("data-range");
+      const isActive = rk === activeModalRange;
+      if (isActive) {
+        btn.classList.add("active");
+      } else {
+        btn.classList.remove("active");
+      }
+      btn.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+  }
+
+  async function openMetricModal(metaKey, rangeOverride) {
     const card = CARD_BY_META[metaKey];
     const meta = METRICS_META[metaKey];
     if (!card || !meta) return;
+    activeModalKey = metaKey;
+    if (rangeOverride && MODAL_RANGES[rangeOverride]) {
+      activeModalRange = rangeOverride;
+    }
+    const rangeSpec = MODAL_RANGES[activeModalRange] || MODAL_RANGES["24h"];
+    const rangeKey = rangeSpec.key;
+    syncModalRangeTabs();
     const seq = ++modalSeq;
 
     setText("modal-metric-title", meta.name);
     setText("modal-metric-source", meta.source);
-    setText("modal-metric-range", "近 24 小时 · 加载中…");
+    setText("modal-metric-range", `${rangeSpec.label} · 加载中…`);
     const icon = $("modal-metric-icon");
     if (icon) icon.innerHTML = meta.iconSvg;
     ["modal-stat-curr", "modal-stat-curr-status", "modal-stat-avg", "modal-stat-avg-status",
@@ -922,7 +989,8 @@
 
     const isState = card.kind === "state";
     const runText = (v) => (v >= 0.5 ? "运行" : "待机");
-    const chartCfg = { endMs: Date.now(), windowMs: HISTORY_HOURS * 3600 * 1000, unit: card.unit, axisTicks: 4, markerSize: 22,
+    const initWindowMs = (rangeSpec.hours || HISTORY_HOURS) * 3600 * 1000;
+    const chartCfg = { endMs: Date.now(), windowMs: initWindowMs, unit: card.unit, axisTicks: 4, markerSize: 22,
       formatValue: isState ? runText : null,
       decimals: card.decimals, pollIntervalS: (latestDisplayData && latestDisplayData.poll_interval_s) || 60 };
     renderChart("modal-svg-chart", "modal-chart-wrap", "modal-scrubber-tip", [], Object.assign({}, chartCfg, { emptyText: "加载中…" }));
@@ -931,7 +999,7 @@
     let peerDoc = null;
     try {
       const roomId = await currentRoomId();
-      const fetchSeries = (mid) => fetch(`/api/v1/rooms/${roomId}/series?metric=${encodeURIComponent(mid)}&hours=${HISTORY_HOURS}`, { cache: "no-store" });
+      const fetchSeries = (mid) => fetch(`/api/v1/rooms/${roomId}/series?metric=${encodeURIComponent(mid)}&range=${encodeURIComponent(rangeKey)}`, { cache: "no-store" });
       const res = await fetchSeries(card.metricId);
       if (res.ok) doc = await res.json();
 
@@ -944,10 +1012,18 @@
         } catch (_) {}
       }
     } catch (_) {}
-    if (seq !== modalSeq) return;  // another card was opened meanwhile
+    if (seq !== modalSeq) return;  // another card or range was selected meanwhile
 
     const points = doc && Array.isArray(doc.points) ? doc.points : [];
-    if (doc && !isNaN(parseTime(doc.generated_at))) chartCfg.endMs = parseTime(doc.generated_at);
+    const endIso = doc && (doc.end_at || doc.generated_at);
+    if (endIso && !isNaN(parseTime(endIso))) chartCfg.endMs = parseTime(endIso);
+    if (doc && typeof doc.window_h === "number" && doc.window_h > 0) {
+      if (rangeKey === "all" && doc.start_at && !isNaN(parseTime(doc.start_at))) {
+        chartCfg.windowMs = Math.max(3600 * 1000, chartCfg.endMs - parseTime(doc.start_at));
+      } else {
+        chartCfg.windowMs = doc.window_h * 3600 * 1000;
+      }
+    }
 
     if (peerDoc && Array.isArray(peerDoc.points)) {
       const allVals = points.concat(peerDoc.points).map((p) => p[1]).filter((v) => typeof v === "number" && isFinite(v));
@@ -971,37 +1047,54 @@
     renderChart("modal-svg-chart", "modal-chart-wrap", "modal-scrubber-tip", points, chartCfg);
 
     if (!doc) {
-      setText("modal-metric-range", "近 24 小时 · 历史数据读取失败");
+      setText("modal-metric-range", `${rangeSpec.label} · 历史数据读取失败`);
       return;
     }
     if (doc.provenance == null) {
-      setText("modal-metric-range", "近 24 小时 · 未接入，无历史数据");
+      setText("modal-metric-range", `${rangeSpec.label} · 未接入，无历史数据`);
       return;
     }
     const vals = points.map((p) => p[1]).filter((v) => typeof v === "number" && isFinite(v));
     const tag = doc.provenance === "SYNTHETIC" ? " · 合成测试数据" : "";
-    setText("modal-metric-range", `近 24 小时 · 真实采样${tag}`);
+    let rangeTitle = rangeSpec.label;
+    if (rangeKey === "all" && points.length > 0) {
+      rangeTitle = `全量历史（${formatAxisTime(points[0][0], 365 * 86400 * 1000)} 至今）`;
+    }
+    let cloudHint = "";
+    const cb = (!card.kind && latestDisplayData && latestDisplayData.cloud_backfill) ? latestDisplayData.cloud_backfill : null;
+    if (cb && cb.enabled) {
+      if (cb.state === "SYNCING") {
+        cloudHint = " · 云端历史自动回填中…";
+      } else if (cb.state === "AUTH_REQUIRED" && rangeKey !== "24h") {
+        cloudHint = " · 待开启云端接口授权后自动补齐";
+      }
+    }
+    setText("modal-metric-range", `${rangeTitle} · 真实采样${tag}${cloudHint}`);
     if (!vals.length) return;
     const lastPt = points[points.length - 1];
-    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const totalCount = (typeof doc.total_count === "number" && doc.total_count >= vals.length) ? doc.total_count : vals.length;
+    const avgVal = (typeof doc.avg_value === "number" && isFinite(doc.avg_value))
+      ? doc.avg_value : (vals.reduce((a, b) => a + b, 0) / vals.length);
+    const minVal = (typeof doc.min_value === "number" && isFinite(doc.min_value)) ? doc.min_value : Math.min(...vals);
+    const maxVal = (typeof doc.max_value === "number" && isFinite(doc.max_value)) ? doc.max_value : Math.max(...vals);
     if (isState) {   // left-side NowHeating record: 1 = running, 0 = standby
-      const runs = vals.filter((v) => v >= 0.5).length;
+      const runs = Math.round(avgVal * totalCount);
       setText("modal-stat-curr", runText(lastPt[1]));
-      setText("modal-stat-curr-status", `左侧 · 采样于 ${formatHHMM(lastPt[0])}`);
-      setText("modal-stat-avg", `${Math.round((runs / vals.length) * 100)}%`);
-      setText("modal-stat-avg-status", "近 24 小时运行占比");
-      setText("modal-stat-range", `${runs} / ${vals.length}`);
+      setText("modal-stat-curr-status", `左侧 · 采样于 ${formatPointTime(lastPt[0], chartCfg.windowMs)}`);
+      setText("modal-stat-avg", `${Math.round(avgVal * 100)}%`);
+      setText("modal-stat-avg-status", `${rangeSpec.label}运行占比`);
+      setText("modal-stat-range", `${runs} / ${totalCount}`);
       setText("modal-stat-range-status", "运行采样 / 全部采样");
-      setText("modal-stat-quality", `${vals.length} 点`);
+      setText("modal-stat-quality", `${totalCount} 点`);
       return;
     }
     setText("modal-stat-curr", `${formatNumber(lastPt[1], card.decimals)} ${card.unit}`);
-    setText("modal-stat-curr-status", `采样于 ${formatHHMM(lastPt[0])}`);
-    setText("modal-stat-avg", `${formatNumber(avg, card.decimals)} ${card.unit}`);
-    setText("modal-stat-avg-status", `${vals.length} 个采样点算术均值`);
-    setText("modal-stat-range", `${formatNumber(Math.min(...vals), card.decimals)} – ${formatNumber(Math.max(...vals), card.decimals)}`);
-    setText("modal-stat-range-status", "近 24 小时最低 / 最高");
-    setText("modal-stat-quality", `${vals.length} 点`);
+    setText("modal-stat-curr-status", `采样于 ${formatPointTime(lastPt[0], chartCfg.windowMs)}`);
+    setText("modal-stat-avg", `${formatNumber(avgVal, card.decimals)} ${card.unit}`);
+    setText("modal-stat-avg-status", `${totalCount} 个采样点算术均值`);
+    setText("modal-stat-range", `${formatNumber(minVal, card.decimals)} – ${formatNumber(maxVal, card.decimals)}`);
+    setText("modal-stat-range-status", `${rangeSpec.label}最低 / 最高`);
+    setText("modal-stat-quality", `${totalCount} 点`);
   }
 
   function closeMetricModal() {
@@ -1102,7 +1195,7 @@
 - 颗粒物 PM2.5: ${fmt("pm2_5")}
 - 室内温度: ${fmt("temperature")}
 - 相对湿度: ${fmt("humidity")}
-- 挥发物 TVOC: ${fmt("tvoc_index")}
+- 挥发物 TVOC: ${fmt("tvoc_ppb")}
 
 ### 2. 床体微环境（Eight Sleep Pod 6 · ${esStatus}）
 - 左侧床温: ${sideLine("left")}
@@ -1219,6 +1312,17 @@
     const modalCloseBtn = $("modal-close-btn");
     if (modalCloseBtn) modalCloseBtn.addEventListener("click", closeMetricModal);
 
+    ["range-btn-24h", "range-btn-7d", "range-btn-30d", "range-btn-all"].forEach((btnId) => {
+      const btn = $(btnId);
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        const rk = btn.getAttribute("data-range");
+        if (rk && MODAL_RANGES[rk] && activeModalKey) {
+          openMetricModal(activeModalKey, rk);
+        }
+      });
+    });
+
     const popover = $("help-popover");
     if (popover) {
       popover.addEventListener("mouseenter", cancelCloseHelp);
@@ -1247,6 +1351,7 @@
     MODAL_HIDDEN_CLASS,
     CARD_WINDOW_MS,
     HISTORY_HOURS,
+    MODAL_RANGES,
     ROOM_ID_RE,
     AG_CARDS,
     ES_CARDS,
@@ -1262,6 +1367,8 @@
     MAX_STALE_RETAIN_S,
     isMetricStaleExpired,
     formatMetricDisplay,
+    formatAxisTime,
+    formatPointTime,
     getAgBadgeInfo,
     getEsBadgeInfo,
     getRoomStatusText,

@@ -3,19 +3,31 @@
 The config file itself is private (contains the operator-provided device address and optional
 Eight Sleep credentials) and must not be committed, zipped or pasted into model context.
 """
+import ipaddress
 import json
 import os
 import re
 from pathlib import Path
 
-from . import adapter, eight_sleep
+from . import adapter, eight_sleep, mqtt_adapter
 
 ROOT = Path(__file__).absolute().parents[3]
 DEFAULT_CONFIG = ROOT / "var/ctds-c01/config.json"
 OPAQUE_ID = re.compile(r"[a-z0-9][a-z0-9-]{2,39}")
 MODES = ("LIVE", "SYNTHETIC")
+PROTOCOLS = ("http", "mqtt")
+MQTT_MODES = ("listen", "subscribe")
 ES_MODES = ("READY", "SYNTHETIC", "LIVE")
 ES_SIDES = ("solo",)
+
+ALLOWED_SOURCE_KEYS = frozenset({
+    "source_id", "mode", "base_url", "binding_revision",
+    "protocol", "mqtt_mode", "mqtt_listen_host", "mqtt_listen_port",
+    "mqtt_broker_url", "mqtt_expected_sensor_id", "mqtt_username", "mqtt_password",
+    "mqtt_inactivity_s", "mqtt_dedup_window_s",
+    "cloud_backfill_enabled", "cloud_api_base_url", "cloud_location_id",
+    "cloud_api_token", "cloud_earliest_date", "cloud_gap_check_interval_s",
+})
 
 ALLOWED_ES_KEYS = frozenset({
     "source_id", "mode", "side", "timezone", "binding_revision",
@@ -72,7 +84,7 @@ def validate(doc):
     cfg.update({k: v for k, v in doc.items() if k not in ("source", "eight_sleep")})
     src = dict(DEFAULTS["source"])
     if "source" in doc:
-        _check(type(doc["source"]) is dict and set(doc["source"]) <= set(src), "invalid source keys")
+        _check(type(doc["source"]) is dict and set(doc["source"]) <= ALLOWED_SOURCE_KEYS, "invalid source keys")
         src.update(doc["source"])
     cfg["source"] = src
 
@@ -93,7 +105,50 @@ def validate(doc):
         side = "solo"
     es["side"] = side
     _check(es["side"] in ES_SIDES, "eight_sleep.side must be solo")
-    if src["mode"] == "LIVE":
+    proto = src.get("protocol", "http")
+    _check(proto in PROTOCOLS, "source.protocol must be http or mqtt")
+    if proto == "mqtt":
+        mqtt_mode = src.get("mqtt_mode") or "listen"
+        _check(mqtt_mode in MQTT_MODES, "source.mqtt_mode must be listen or subscribe")
+        src["mqtt_mode"] = mqtt_mode
+        inact = src.get("mqtt_inactivity_s", 240)
+        _check(type(inact) is int and 5 <= inact <= 86400, "mqtt_inactivity_s must be int in [5,86400]")
+        dedup = src.get("mqtt_dedup_window_s", 15)
+        _check(type(dedup) in (int, float) and 0 <= dedup <= 300, "mqtt_dedup_window_s must be in [0,300]")
+        exp_id = src.get("mqtt_expected_sensor_id")
+        _check(exp_id is None or (isinstance(exp_id, str) and bool(mqtt_adapter.SENSOR_ID_RE.fullmatch(exp_id))),
+               "mqtt_expected_sensor_id must be 6..16 hex chars")
+        _check(src.get("mqtt_username") is None or isinstance(src["mqtt_username"], str),
+               "mqtt_username must be string or null")
+        _check(src.get("mqtt_password") is None or isinstance(src["mqtt_password"], str),
+               "mqtt_password must be string or null")
+        if src.get("base_url") is not None:
+            try:
+                adapter.validate_base_url(src["base_url"])
+            except adapter.AdapterError as exc:
+                raise ConfigError(str(exc)) from exc
+        if src["mode"] == "LIVE":
+            if mqtt_mode == "listen":
+                lhost = src.get("mqtt_listen_host") or "0.0.0.0"
+                _check(isinstance(lhost, str), "mqtt_listen_host must be string")
+                if lhost not in ("0.0.0.0", "::"):
+                    try:
+                        lip = ipaddress.ip_address(lhost)
+                    except ValueError as exc:
+                        raise ConfigError("mqtt_listen_host must be 0.0.0.0, ::, loopback, or private IP") from exc
+                    _check(lip.is_loopback or lip.is_private, "mqtt_listen_host must be loopback or private IP")
+                min_port = 0 if os.environ.get("CTDS_TEST_SANDBOX") == "1" else 1024
+                lport = src.get("mqtt_listen_port", 1883)
+                _check(type(lport) is int and min_port <= lport <= 65535,
+                       f"mqtt_listen_port must be int in [{min_port},65535]")
+                src["mqtt_listen_host"] = lhost
+                src["mqtt_listen_port"] = lport
+            else:
+                try:
+                    mqtt_adapter.validate_mqtt_broker_url(src.get("mqtt_broker_url"))
+                except adapter.AdapterError as exc:
+                    raise ConfigError(str(exc)) from exc
+    elif src["mode"] == "LIVE":
         try:
             adapter.validate_base_url(src["base_url"])
         except adapter.AdapterError as exc:
@@ -103,6 +158,31 @@ def validate(doc):
             raise ConfigError(f"CONFIG_ERROR: eight_sleep.base_url must be https://*.8slp.net: {es['base_url']}")
         if es.get("auth_url") and not eight_sleep.is_official_8slp_url(es["auth_url"]):
             raise ConfigError(f"CONFIG_ERROR: eight_sleep.auth_url must be https://*.8slp.net: {es['auth_url']}")
+    if "cloud_backfill_enabled" in src:
+        _check(type(src["cloud_backfill_enabled"]) is bool, "cloud_backfill_enabled must be bool")
+    if src.get("cloud_api_base_url") is not None:
+        from . import cloud_backfill
+        _check(isinstance(src["cloud_api_base_url"], str) and cloud_backfill.is_allowed_cloud_base_url(src["cloud_api_base_url"]),
+               "cloud_api_base_url must be https://api.airgradient.com (or loopback in sandbox)")
+    if src.get("cloud_location_id") is not None:
+        loc_str = str(src["cloud_location_id"]).strip()
+        _check(loc_str.isdigit() and 1 <= int(loc_str) <= 999999999, "cloud_location_id must be positive numeric id")
+    if src.get("cloud_api_token") is not None:
+        tok = src["cloud_api_token"]
+        _check(isinstance(tok, str) and 8 <= len(tok) <= 128 and not any(c.isspace() for c in tok),
+               "cloud_api_token must be 8..128 non-whitespace chars")
+    if src.get("cloud_earliest_date") is not None:
+        from . import cloud_backfill
+        try:
+            cloud_backfill.parse_cloud_timestamp(src["cloud_earliest_date"])
+        except adapter.AdapterError as exc:
+            raise ConfigError(f"invalid cloud_earliest_date: {exc}") from exc
+    if "cloud_gap_check_interval_s" in src:
+        _check(type(src["cloud_gap_check_interval_s"]) is int and 60 <= src["cloud_gap_check_interval_s"] <= 86400,
+               "cloud_gap_check_interval_s must be int in [60,86400]")
+    if src.get("cloud_backfill_enabled"):
+        _check(src.get("cloud_location_id") is not None and src.get("cloud_api_token"),
+               "cloud_backfill_enabled requires cloud_location_id and cloud_api_token")
     for k, lo, hi in (("listen_port", 1024, 65535), ("poll_interval_s", 10, 3600), ("timeout_s", 1, 30),
                       ("retries", 0, 5), ("max_backoff_s", 10, 3600), ("stale_after_s", 30, 86400)):
         _check(type(cfg[k]) is int and lo <= cfg[k] <= hi, f"{k} must be int in [{lo},{hi}]")
