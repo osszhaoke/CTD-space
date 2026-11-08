@@ -13,7 +13,9 @@
 ## 核心特性（StarMap C01 · `v0.1.1-sqlite-lite`）
 
 - **双模块空间与床体微环境驾驶舱（4SEAS 极奢看板）**：
-  - **室内环境 · 空间空气与温湿（AirGradient）**：只读采集 PM2.5、CO₂、温度、相对湿度、TVOC 指数、NOx 指数、PM1.0、PM10 等实时读数；支持同网段 `/24` 自动发现与换 IP 自愈重绑；内置 1 小时卡片趋势线、点击展开 24 小时大图及顶部 24 整点时间轴回溯（真实采样不插值）。
+  - **室内环境 · 空间空气与温湿（AirGradient）**：只读采集 PM2.5、CO₂、温度、相对湿度、TVOC、PM1.0、PM10 等实时读数；双型号兼容：`I-9PSL` 本地 HTTP（`/measures/current`，支持同网段 `/24` 自动发现与换 IP 自愈重绑）与 `ONE 8PSL CHN`（FW 8.7.6）本地 MQTT `:1883` 只读推送（纯标准库内建监听器，禁止出站 `PUBLISH`）；大屏第 5 卡显示 `TVOC 浓度 (ppb)`（9PSL 的 TVOC/NOx 指数仍按原语义入库，缺失时严格记 `NOT_PROVIDED`）。
+  - **云端全量历史自动回填（可选）**：经 AirGradient 官方只读 Public API v1 自动分页回填全量历史并断点续传；宿主机休眠/断电/断网恢复后自动补齐缺口，本地实时样本 `±45s` 优先去重；云端故障不影响本地实时采集。
+  - **时序浏览**：卡片内 1 小时趋势线、顶部 24 整点时间轴回溯；点击卡片打开大图弹窗，可切换 `24小时 / 7天 / 30天 / 全量历史`（保极值 Min-Max 抽稀，真实采样不插值）。
   - **床微环境 · 双侧对称温控看板（Eight Sleep Pod 6）**：呈现左右两侧当前床温与目标床温（纵轴刻度自动对齐，直观对比双侧温差）、全夜床温均值、床周环境室温与温控运行状态；内置 `RAW_TO_CELSIUS_MAP`（`-100..100` → `13..44 ℃`）查表转换、`360s` 独立陈旧度窗口及 AirGradient 退避/暂停解耦。
   - **严格隐私与只读安全边界**：所有外部设备请求严格只读，绝不发起硬件反向控制；大屏展示与 AI 微环境切片导出**严格剔除心率、HRV、呼吸率等个人生理指标**及一切设备序列号、网络凭据。
 - **双模式视觉、局域网只读投屏与 macOS TLS 自愈**：
@@ -25,11 +27,12 @@
 
 ## 快速启动与双击工具箱（macOS）
 
-仓库根目录提供 5 个免终端双击入口：
+仓库根目录提供免终端双击入口：
 
 | 双击脚本 | 用途 | 对应命令行 |
 |---|---|---|
-| `一键部署_StarMap.command` | 本机环回部署（自动发现 AirGradient、引导绑定 Eight Sleep、119 项自检并拉起 `127.0.0.1:8765`） | `bash delivery/scripts/deploy_mac.sh` |
+| `启动CTDS.command` / `启动StarMap.command` | **日常快速启动（类似 PTDS 启动器）**：秒开大屏并保持后台静默数据搜集，关闭窗口或网页不会中断采集 | `bash 启动CTDS.command`（支持 `start` / `stop` / `status` / `restart`） |
+| `一键部署_StarMap.command` | 本机环回部署（自动发现 AirGradient、引导绑定 Eight Sleep、135 项自检并拉起 `127.0.0.1:8765`） | `bash delivery/scripts/deploy_mac.sh` |
 | `一键部署_StarMap_局域网共享.command` | 开启同网段局域网只读投屏共享（供同一 Wi-Fi 下 iPad / 其他电脑浏览大屏） | `bash delivery/scripts/deploy_mac.sh --lan` |
 | `一键打包_StarMap.command` | 运行沙箱测试并生成单机迁移包 `var/ctds-c01/StarMap-C01-Mac-OneClick.zip`（权限 `0600`） | `bash delivery/scripts/package_mac.sh` |
 | `检测_EightSleep连通性.command` | 诊断 DNS / TCP / TLS 根证书链与 API 状态，在桌面生成脱敏报告 | `python3 -B delivery/scripts/diag_eight_sleep.py` |
@@ -53,11 +56,28 @@ PYTHONPATH=development/ctds python3 -B -m room_display bind-eight-sleep --check
 
 ---
 
+## AirGradient 云端历史自动回填（可选，零手工导出）
+
+在 AirGradient 控制台开启 **API Access** 后，于本机绑定一次（Token 隐藏输入，写入 `0600` 私密配置）：
+
+```bash
+PYTHONPATH=development/ctds python3 -B -m room_display --location-id <LOCATION_ID> bind-airgradient-cloud
+# 静默检查（不回显凭据）
+PYTHONPATH=development/ctds python3 -B -m room_display --check bind-airgradient-cloud
+# 手动触发一次同步（守护进程运行时会自动执行，通常无需手动）
+PYTHONPATH=development/ctds python3 -B -m room_display sync-cloud-history
+```
+
+详见运维手册 §3.8。
+
+---
+
 ## 轻量容器化启动（可选 Docker Compose）
 
 ```bash
 docker compose up -d --build
 # 默认仅映射宿主机环回 127.0.0.1:8765:8765，持久化挂载 ./var:/app/var
+# 使用 8PSL 本地 MQTT 推送时，取消 docker-compose.yml 中 "1883:1883" 一行注释
 ```
 
 ---
@@ -65,7 +85,7 @@ docker compose up -d --build
 ## 开发与自动化验证命令
 
 ```bash
-# 运行全量沙箱测试套件（119 项单元/契约/故障自愈测试，严格零警告模式）
+# 运行全量沙箱测试套件（135 项单元/契约/故障自愈测试，严格零警告模式）
 CTDS_TEST_SANDBOX=1 PYTHONPATH=development/ctds python3 -B -W error \
   -m unittest discover -s development/ctds/tests/room_display -p "test_*.py"
 
