@@ -76,6 +76,12 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(p["pod5"]["status"], "READY_NOT_CONNECTED")
         self.assertEqual(p["pod5"]["metrics"], [])
         self.assertTrue(all(c["availability"] == "DOC_ONLY" for c in p["airgradient"]))  # synthetic never VERIFIED
+        # Every /admin display-field row must have a capability entry (unit), incl. legacy tvoc_ppb on HTTP sources
+        _, _, f = self.req("GET", "/api/v1/admin/display-fields")
+        cap_units = {c["metric_id"]: c["canonical_unit"] for c in p["airgradient"]}
+        for row in f["fields"]:
+            self.assertIn(row["metric_id"], cap_units, row["metric_id"])
+        self.assertEqual(cap_units["tvoc_ppb"], "ppb")
 
     def test_admin_patch_roundtrip(self):
         fields = [{"metric_id": "co2", "enabled": True, "display_order": 1, "label_zh": "二氧化碳浓度"},

@@ -18,7 +18,7 @@ import unittest
 
 from _helpers import Clock, cfg
 
-from room_display import collector, config, eight_sleep, projection, server
+from room_display import catalog, collector, config, eight_sleep, projection, server
 from room_display.__main__ import _describe_bind_error
 from room_display.adapter import AdapterError
 from room_display.store import Store
@@ -42,7 +42,11 @@ ES_CARDS = _registry_keys("ES_CARDS")
 
 class FrontendContractTest(unittest.TestCase):
     def test_registry_matches_backend_metrics(self):
-        self.assertEqual([c[2] for c in AG_CARDS], ["co2", "pm2_5", "temperature", "humidity", "tvoc_index"])
+        self.assertEqual([c[2] for c in AG_CARDS], ["co2", "pm2_5", "temperature", "humidity", "tvoc_ppb"])
+        self.assertTrue({c[2] for c in AG_CARDS} <= set(catalog.ALL_AG_METRICS))
+        self.assertIn("TVOC 浓度", HTML)
+        self.assertIn('<span class="metric-unit">ppb</span>', HTML)
+        self.assertNotIn("TVOC 挥发物指数", HTML)
         # Right module mirrors the left one diagonally: 2 + 3 cards, all backed by real Eight Sleep metrics
         self.assertEqual([c[0] for c in ES_CARDS], ["es-left", "es-right", "es-state", "es-night", "es-elev"])
         self.assertTrue({c[2] for c in ES_CARDS} <= set(eight_sleep.EIGHT_SLEEP_METRICS))
@@ -173,6 +177,26 @@ const rightSample = [[new Date(end - 30*60000).toISOString(), 20.0], [new Date(e
 const gLeft = core.computeChartGeometry(leftSample, {width: 380, height: 70, endMs: end, windowMs: H, minY: 19.5, maxY: 22.5});
 const gRight = core.computeChartGeometry(rightSample, {width: 380, height: 70, endMs: end, windowMs: H, minY: 19.5, maxY: 22.5});
 assert.strictEqual(gLeft.all[1].y.toFixed(2), gRight.all[2].y.toFixed(2), '21.0 C on left and right must share exact Y coordinate');
+
+// Multi-day mixed-cadence series (90s recent MQTT + 1h cloud archive on 7d, plus 20-day unplugged gap on all-time)
+const W7D = 7 * 24 * H;
+const mixed7d = [];
+for (let h = 120; h >= 49; h--) mixed7d.push([new Date(end - h * H).toISOString(), 15 + (h % 5)]);
+for (let s = 200; s >= 0; s--) mixed7d.push([new Date(end - s * 90000).toISOString(), 18 + (s % 3)]);
+const gap7d = core.inferGapMs(mixed7d, 60, W7D);
+const g7d = core.computeChartGeometry(mixed7d, {width: 600, height: 180, endMs: end, windowMs: W7D, gapMs: gap7d});
+assert.ok(!g7d.segments.some(seg => seg.length === 1), 'hourly cloud archive points in 7d must stay connected, not solo dots');
+
+const WALL = 30 * 24 * H;
+const withUnpluggedGap = [
+  [new Date(end - 25 * 24 * H).toISOString(), 10],
+  [new Date(end - 24 * 24 * H).toISOString(), 12],
+  ...mixed7d,
+];
+const gapAll = core.inferGapMs(withUnpluggedGap, 60, WALL);
+const gAll = core.computeChartGeometry(withUnpluggedGap, {width: 600, height: 180, endMs: end, windowMs: WALL, gapMs: gapAll});
+assert.ok(gAll.segments.length >= 2, '20-day unplugged sensor gap must still break cleanly without fake slope');
+assert.strictEqual(gAll.segments[0].length, 2, 'daily archive points before the 20-day gap remain connected together');
 """)
 
     def test_display_formatting_respects_status(self):

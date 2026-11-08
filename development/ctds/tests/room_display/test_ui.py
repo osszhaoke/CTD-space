@@ -46,6 +46,11 @@ class FakeEightSleepServer:
                         req_data = {}
 
                     is_refresh = req_data.get("grant_type") == "refresh_token" or "refreshToken" in req_data
+                    if getattr(outer, "refresh_429", False) and is_refresh:
+                        self.send_response(429)
+                        self.send_header("Retry-After", "900")
+                        self.end_headers()
+                        return
                     if outer.refresh_fails and is_refresh:
                         self.send_response(401)
                         self.end_headers()
@@ -482,6 +487,8 @@ class StaticUiTest(unittest.TestCase):
 
         # 2. OneClick migration bundle
         bundle_zip = root_dir / "var" / "ctds-c01" / "StarMap-C01-Mac-OneClick.zip"
+        if os.environ.get("CTDS_SKIP_BUNDLE_TEST") == "1":
+            self.skipTest("packaging gate: testing with pre-existing bundle on disk before rebuild")
         if not bundle_zip.exists():
             self.skipTest("bundle zip not present (running inside a deployed bundle or target machine)")
 
@@ -512,6 +519,8 @@ class StaticUiTest(unittest.TestCase):
             self.assertTrue(any(name.endswith("preview.js") for name in names), "preview.js missing from bundle zip")
             self.assertTrue(any(name.endswith("preview.css") for name in names), "preview.css missing from bundle zip")
             self.assertTrue(any(name.endswith("一键部署_StarMap.command") for name in names), "一键部署 launcher missing from bundle zip")
+            self.assertTrue(any(name.endswith("启动CTDS.command") for name in names), "启动CTDS launcher missing from bundle zip")
+            self.assertTrue(any(name.endswith("service_control.py") for name in names), "service_control.py missing from bundle zip")
             self.assertTrue(any(name.endswith("一键打包_StarMap.command") for name in names), "一键打包 launcher missing from bundle zip")
             self.assertTrue(any(name.endswith("package_mac.sh") for name in names), "package_mac.sh missing from bundle zip")
 
@@ -926,9 +935,36 @@ class StaticUiTest(unittest.TestCase):
                 self.assertTrue(out["authenticated"])
                 self.assertTrue(out["device_ok"])
                 self.assertEqual(out["outcome"], "OK")
+                self.assertGreaterEqual(len(srv.hits), 1, "--check must verify token over HTTP even when IDs cached")
+
+                # Expired/rejected token with cached user_id/device_id must NOT false-positive as OK
+                srv.should_401_once = True
+                srv._401_done = False
+                buf_bad = io.StringIO()
+                with redirect_stdout(buf_bad):
+                    rc_bad = rd_main.main(["--config", str(cfg_path), "bind-eight-sleep", "--check"])
+                self.assertEqual(rc_bad, 1)
+                out_bad = json.loads(buf_bad.getvalue().strip())
+                self.assertFalse(out_bad["authenticated"])
+                self.assertEqual(out_bad["outcome"], "AUTH_REJECTED")
 
                 sha_after = hashlib.sha256(cfg_path.read_bytes()).hexdigest()
                 self.assertEqual(sha_before, sha_after, "--check mode must not modify configuration file!")
+
+                # Verify make_private_readme treats cloud_api_token as sensitive even when Eight Sleep is READY
+                import importlib.util
+                root_dir = Path(__file__).resolve().parents[4]
+                bmb_path = root_dir / "delivery/scripts/build_mac_bundle.py"
+                if bmb_path.is_file():
+                    spec = importlib.util.spec_from_file_location("bmb_mod", bmb_path)
+                    bmb_mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(bmb_mod)
+                    ag_secret_cfg = Path(tmp) / "ag_cloud_only.json"
+                    doc_ag = dict(config.TEMPLATE)
+                    doc_ag["source"] = dict(doc_ag["source"], cloud_api_token="mock-cloud-token")
+                    ag_secret_cfg.write_text(json.dumps(doc_ag), encoding="utf-8")
+                    readme_txt = bmb_mod.make_private_readme(ag_secret_cfg)
+                    self.assertIn("勿外发", readme_txt)
         finally:
             srv.close()
 
@@ -1014,8 +1050,11 @@ class StaticUiTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
-            with zipfile.ZipFile(bundle_zip, "r") as zf:
-                zf.extractall(tmp_p)
+            # Use native unzip to preserve 0755 executable mode bits (like macOS Archive Utility)
+            res_unzip = subprocess.run(["unzip", "-q", str(bundle_zip), "-d", str(tmp_p)], capture_output=True)
+            if res_unzip.returncode != 0:
+                with zipfile.ZipFile(bundle_zip, "r") as zf:
+                    zf.extractall(tmp_p)
 
             extracted_root = tmp_p / "StarMap-C01-Mac"
             self.assertTrue(extracted_root.is_dir())
@@ -1044,7 +1083,9 @@ class StaticUiTest(unittest.TestCase):
                 env=dict(os.environ, PYTHONPATH="development/ctds"),
                 capture_output=True,
                 text=True,
-                timeout=30,
+                # In-bundle self-test runs the full suite (135 tests, ~37s alone on the dev Mac) against the
+                # snapshot DB; 30s was set when the suite was far smaller and now times out. Bounded, not unlimited.
+                timeout=180,
             )
             self.assertEqual(proc.returncode, 0, f"self-test in unpacked bundle failed:\n{proc.stdout}\n{proc.stderr}")
             res_json = json.loads(proc.stdout.strip())
@@ -1235,12 +1276,12 @@ assert.strictEqual(core.evaluateHumidity(50), '舒缓恒湿 · 呼吸粘膜滋�
 assert.strictEqual(core.evaluateHumidity(60), '舒缓恒湿 · 呼吸粘膜滋润');
 assert.strictEqual(core.evaluateHumidity(60.1), '湿度偏高 · 建议除湿清爽');
 
-// TVOC: <=100, <=200, >200
-assert.strictEqual(core.evaluateTVOC(80), '清新无味 · 材质环保安全');
-assert.strictEqual(core.evaluateTVOC(100), '清新无味 · 材质环保安全');
-assert.strictEqual(core.evaluateTVOC(101), '轻度活跃 · 注意空气对流');
-assert.strictEqual(core.evaluateTVOC(200), '轻度活跃 · 注意空气对流');
-assert.strictEqual(core.evaluateTVOC(201), '挥发物超标 · 建议排风散气');
+// TVOC (ppb): <=220, <=660, >660
+assert.strictEqual(core.evaluateTVOC(0), '清新无味 · 材质环保安全');
+assert.strictEqual(core.evaluateTVOC(220), '清新无味 · 材质环保安全');
+assert.strictEqual(core.evaluateTVOC(221), '轻度活跃 · 注意空气对流');
+assert.strictEqual(core.evaluateTVOC(660), '轻度活跃 · 注意空气对流');
+assert.strictEqual(core.evaluateTVOC(661), '挥发物超标 · 建议排风散气');
 
 // 4. Offline reset elements and tags completeness
 assert.ok(core.OFFLINE_RESET_ELEMENTS.length >= 8);
@@ -1348,6 +1389,54 @@ console.log('NODE_PREVIEW_SUITE_PASS');
                     res = json.loads(out.getvalue())
                     self.assertEqual(res["outcome"], adapter.AUTH_REJECTED)
                     self.assertFalse(res["authenticated"])
+
+    def test_service_control_cli_and_launcher(self):
+        root_dir = Path(__file__).resolve().parents[4]
+        ctl_script = root_dir / "delivery" / "scripts" / "service_control.py"
+        self.assertTrue(ctl_script.is_file(), "service_control.py must exist")
+
+        # 1. Launchers exist and have 0755 executable permissions
+        for cmd_name in ("启动CTDS.command", "启动StarMap.command"):
+            cmd_path = root_dir / cmd_name
+            self.assertTrue(cmd_path.is_file(), f"{cmd_name} must exist")
+            if (root_dir / ".git").is_dir() or (cmd_path.stat().st_mode & 0o111):
+                self.assertEqual(cmd_path.stat().st_mode & 0o111, 0o111, f"{cmd_name} must be executable")
+            # Bash syntax check
+            res_syntax = subprocess.run(["bash", "-n", str(cmd_path)], capture_output=True, text=True)
+            self.assertEqual(res_syntax.returncode, 0, f"{cmd_name} syntax error: {res_syntax.stderr}")
+
+        # 2. Dynamic import service_control and test helpers
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("service_control_mod", ctl_script)
+        ctl_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ctl_mod)
+
+        self.assertFalse(ctl_mod.is_pid_alive(-1))
+        self.assertFalse(ctl_mod.is_pid_alive(0))
+
+        # 3. Test status CLI execution (does not mutate state)
+        res_status = subprocess.run(
+            [sys.executable, "-B", str(ctl_script), "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertIn("StarMap (CTDS)", res_status.stdout)
+        self.assertIn("状态:", res_status.stdout)
+
+        # 4. Test --help CLI execution (safe, read-only)
+        res_help = subprocess.run(
+            [sys.executable, "-B", str(ctl_script), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(res_help.returncode, 0)
+        self.assertIn("StarMap (CTDS)", res_help.stdout)
+        self.assertIn("start", res_help.stdout)
+        self.assertIn("stop", res_help.stdout)
+        self.assertIn("status", res_help.stdout)
+
 
 
 
