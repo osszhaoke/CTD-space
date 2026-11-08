@@ -9,35 +9,42 @@
 ## 1. 架构与安全隔离边界
 
 ```
-[ AirGradient LAN ]                     [ 本机回路 127.0.0.1 ]
-  GET /measures/current                     
-           │                                 ┌────────────────────────┐
-           ▼                                 │ 浏览器大屏 (中性深色)  │
-┌───────────────────────┐                    │ http://127.0.0.1:8765/ │
-│ 采集适配器 (只读)     │                    └───────────▲────────────┘
-│ (adapter / collector) │                                │
-└──────────┬────────────┘                    ┌───────────┴────────────┐
-           ▼                                 │ 环回服务 (server)      │
-┌───────────────────────┐                    │ - GET /api/v1/...      │
-│ SQLite WAL 持续存储   │───────────────────►│ - PATCH /admin/fields  │
-│ var/ctds-c01/*.sqlite3│                    │   (仅限本机严格白名单) │
-└───────────────────────┘                    └────────────────────────┘
+[ AirGradient LAN ]                          [ 本机回路 127.0.0.1 ]
+  I-9PSL : GET /measures/current (HTTP)
+  8PSL   : MQTT 推送 → 本机 :1883 只读监听        ┌────────────────────────┐
+           │                                      │ 浏览器大屏 (中性深色)  │
+           ▼                                      │ http://127.0.0.1:8765/ │
+┌───────────────────────┐                         └───────────▲────────────┘
+│ 采集适配器 (只读)     │◄── [ 可选 AirGradient                │
+│ adapter / mqtt_adapter│     Cloud API v1 只读  ┌───────────┴────────────┐
+│ collector / cloud_    │     历史回填/缺口补齐 ] │ 环回服务 (server)      │
+│ backfill              │                         │ - GET /api/v1/...      │
+└──────────┬────────────┘                         │ - PATCH /admin/fields  │
+           ▼                                      │   (仅限本机严格白名单) │
+┌───────────────────────┐                         └───────────▲────────────┘
+│ SQLite WAL 持续存储   │─────────────────────────────────────┘
+│ var/ctds-c01/*.sqlite3│
+└───────────────────────┘
 ```
 
-1. **零第三方依赖**：系统完全基于 Python 标准库（`sqlite3`、`http.server`、`urllib`、`json`、`hashlib`）实现，不依赖 pip、npm、外部 CDN 或云端服务。
+1. **零第三方依赖**：系统完全基于 Python 标准库（`sqlite3`、`http.server`、`socket`、`urllib`、`json`、`hashlib`）实现，不依赖 pip、npm、外部 CDN 或外部 MQTT Broker；唯一可选的外网调用是本人显式绑定后的 AirGradient 官方只读历史 API（见 §3.8）。
 2. **私密配置与数据隔离**：
    - 现场设备 IP 与私密配置存放在 `var/ctds-c01/config.json`；
    - 运行时数据库存放在 `var/ctds-c01/ctds_c01.sqlite3`；
    - `var/` 目录已被 `.gitignore` 严格忽略，绝不进 Git、不进交付 ZIP、不进入模型上下文。
 3. **网络与设备安全**：
-   - 严禁局域网扫描、严禁猜测设备 IP；设备地址必须由现场网络负责人确认并受控填入；
-   - 适配器仅执行单次 HTTP GET 请求，超时 5 秒，拒绝 HTTP 重定向，包体上限 64KB；
-   - 适配器在接收载荷时即刻丢弃设备硬件序列号（`serialno`）、WiFi 信号（`wifi`）等硬件标识，仅保留载荷哈希；
-   - 环回展示服务严格绑定 `127.0.0.1`，校验 Host 头，防 DNS 重绑定；
+   - 支持 **双协议兼容只读接入**：
+     - **本地 HTTP（如 I-9PSL，固件 3.x）**：支持通过 `auto-bind` 在本机所在私网 `/24` 网段内受控只读探测 `/measures/current`，亦支持手工指定设备 IP；适配器仅执行单次 HTTP GET 请求，超时 5 秒，拒绝 HTTP 重定向，包体上限 64KB；
+     - **本地 MQTT（如 ONE 8PSL CHN，固件 8.7.6）**：纯 Python 标准库内建只读 MQTT v3.1.1/v5.0 监听器（`mqtt_mode="listen"`）与外部本地 Broker 订阅客户端（`mqtt_mode="subscribe"`），零第三方依赖、零外部 Broker 安装；仅接受 `airgradient/readings/<sensor-id>` 只读测量 Topic，传输层硬断言禁止发送任何出站 `PUBLISH` 控制帧，拒绝订阅请求、控制 Topic 及超大报文（>64KB）；
+   - 适配器在接收载荷时即刻丢弃设备硬件序列号（`serialno`）、WiFi 名称与信号（`ssid`、`wifi`）、硬件内部计数（`boot`、`wdog`、`hwVersion`、`light`）等敏感标识，仅保留载荷哈希；
+   - 大屏展示服务默认严格绑定 `127.0.0.1` 环回地址并校验 `Host` 头防 DNS 重绑定；如需同网段 iPad / 电脑投屏浏览，可显式开启 `--lan` 局域网共享模式（仅对 RFC1918 私网开放只读浏览，`/admin` 字段修改接口仍严格锁定宿主机本机环回）；
    - 页面开启严苛 Content-Security-Policy，不加载任何外部脚本、样式或字体。
-4. **Pod 5 边界**：
-   - Eight Sleep Pod 5 仅作为 `READY_NOT_CONNECTED` 状态占位卡展示；
-   - 严禁配置账号登录、严禁读取真人生理数据、严禁控制温控硬件。
+4. **Pod 6 接入与数据隐私边界（方案 B 授权落档）**：
+   - Eight Sleep Pod 6 通过交互式账号认证在目标 Mac 本机只读接入（具备 macOS 系统根证书自动兜底能力），采集数据落入本机私密 SQLite；
+   - **前端与导出隐私隔离**：大屏床微环境区采用 **5 卡镜像布局**（左侧床温与目标、右侧床温与目标、全夜床体温度、床周室温、温控运行状态），**前端界面与 AI 诊断导出均严格屏蔽心率、HRV、呼吸率等个人生理指标**；
+   - 采集器仅执行严格只读 HTTP 请求拉取数据，严禁任何硬件温控反向写入或调节；
+   - 运行时配置文件 `var/ctds-c01/config.json` 采用原子写入且权限严格限制为 `0600`；
+   - 迁移交付包采用单一受限包（`var/ctds-c01/StarMap-C01-Mac-OneClick.zip`，权限 `0600`），包含快照数据以支持目标 Mac 无缝接续运行。
 
 ---
 
@@ -51,15 +58,29 @@ bash delivery/scripts/deploy_mac.sh
 脚本将自动完成以下 4 步：
 1. 检查 Python 3.10+ 环境并载入离线基准库（若首次运行）；
 2. 执行 `auto-bind` 自动扫描当前网段内的 AirGradient 监测器，发现后自动更新 `var/ctds-c01/config.json` 并拉取最新读数（若运行时设备重连或换 IP，后台采集器亦会自动重发现并更新绑定）；
-3. 执行 `self-test` 自动跑完 60 项单元/集成测试与大屏配置自检（确认房间名为“睡眠房”、双模块分区与默认黑夜模式就绪）；
-4. 启动后台环回服务并自动打开 `http://127.0.0.1:8765/`。
+3. 执行 `self-test` 自动跑完 135 项单元/集成测试与大屏配置自检（确认房间名为“睡眠房”、双模块分区与默认黑夜模式就绪）；
+4. 启动后台环回服务并自动打开 `http://127.0.0.1:8765/`（若需局域网内其他 iPad / Mac 只读访问大屏，可改为双击 `一键部署_StarMap_局域网共享.command` 或传入 `--lan`）。
+
+### 2.0.1 日常快速启动与后台常驻（类似 PTDS 启动器）
+首次部署完成后，日常使用无需每次重新执行耗时的 135 项自检与网络扫描。直接双击根目录的 **`启动CTDS.command`**（或 `启动StarMap.command`），或在终端执行：
+```bash
+# 默认启动后台常驻服务并打开大屏（若已在运行则秒级就绪，不重复杀进程）
+bash 启动CTDS.command
+
+# 或通过子命令管理后台守护进程
+bash 启动CTDS.command status   # 查看后台运行状态与数据采集统计
+bash 启动CTDS.command stop     # 优雅停止后台服务
+bash 启动CTDS.command restart  # 重启后台服务
+```
+- **脱离会话常驻**：后台服务基于独立会话（`start_new_session`）运行，关闭浏览器标签页或关闭终端窗口，后台数据搜集（AirGradient MQTT/HTTP + 云端历史回填 + Eight Sleep 退避）仍将**持续静默执行**；
+- **秒级就绪**：若服务已在后台健康运行，双击直接唤起浏览器大屏，不重复杀掉已有实例、不中断已有连续时序写入。
 
 ### 2.1 检查运行环境
 在终端中进入项目根目录并检查 Python 版本：
 ```bash
-cd /Users/osszhaoke/Downloads/001-CTDSvFoundation-StarMap
+cd <repo-root>
 python3 --version
-# 期望：Python 3.10 或更高版本
+# 期望：Python 3.10 或更高版本（macOS 自带 Python 3.9+ 亦可兼容运行）
 ```
 
 ### 2.2 自动发现绑定或初始化运行配置
@@ -67,13 +88,22 @@ python3 --version
 ```bash
 PYTHONPATH=development/ctds python3 -B -m room_display auto-bind
 ```
-若仅初始化合成模板（如果 `var/ctds-c01/config.json` 不存在会自动生成合成模板，已存在不会覆盖）：
-```bash
-PYTHONPATH=development/ctds python3 -B -m room_display init-config
-```
+局域网探测发现 AirGradient 监测器后，`auto-bind` 会自动将 `source.mode` 从 `SYNTHETIC` 切换为 `LIVE` 并持久化写入配置。
 
-### 2.3 手工或自动绑定现场真实 AirGradient 监测器
-配置文件 `var/ctds-c01/config.json` 结构如下（`auto-bind` 会自动识别网段内设备并填入 `base_url`）：
+若仅初始化配置或迁移已有配置：
+- **初始化空配置模板**（若 `var/ctds-c01/config.json` 不存在则从 `config.example.json` 复制或写出合成默认模板，已存在不会覆盖）：
+  ```bash
+  PYTHONPATH=development/ctds python3 -B -m room_display init-config
+  ```
+- **配置结构迁移**（原子更新、归一化配置结构与单边 solo 模式，权限自动限制为 0600）：
+  ```bash
+  PYTHONPATH=development/ctds python3 -B -m room_display migrate-config
+  ```
+
+### 2.3 手工或自动绑定现场真实 AirGradient 监测器（I-9PSL HTTP / ONE 8PSL CHN MQTT）
+
+#### 模式一：新款 I-9PSL（本地 HTTP `GET /measures/current`）
+配置文件 `var/ctds-c01/config.json` 结构如下（`auto-bind` 会自动识别网段内支持本地 HTTP 的设备并填入 `base_url`）：
 ```json
 {
   "room_id": "demo-room-01",
@@ -88,12 +118,43 @@ PYTHONPATH=development/ctds python3 -B -m room_display init-config
   "source": {
     "source_id": "ag-room-01",
     "mode": "LIVE",
+    "protocol": "http",
     "base_url": "http://192.0.2.10",
     "binding_revision": 1
   }
 }
 ```
-*注：`base_url` 为现场合法 IP（格式为 `http://ip` 或 `http://host:port`，不带多余路径）。*
+*注：`base_url` 为现场合法 IP（格式为 `http://ip` 或 `http://host:port`，不带多余路径）；`protocol` 缺省值即为 `"http"`。*
+
+#### 模式二：旧款 AirGradient ONE 8PSL CHN（固件 8.7.6，本地 MQTT 只读推送）
+旧款 `8PSL CHN`（`HW 8.0.0 / FW 8.7.6`）不开放本地 `80` 端口 HTTP 接口，但原生支持局域网 MQTT v3.1.1 主动推送（约每 90 秒上报一次 `airgradient/readings/<8位十六进制传感器ID>`）：
+1. 在 AirGradient 官方管理后台 `General Settings -> Connectivity -> MQTT` 开启 `Enabled`，将 `MQTT Broker URL` 设为本机局域网地址（示例占位：`mqtt://192.0.2.3:1883`），保存后**将 8PSL 拔电重插一次**使固件冷启动加载新 Broker 地址；
+2. 在本机 `var/ctds-c01/config.json` 的 `source` 节点配置 `protocol: "mqtt"`（如现场已有独立本地 Broker，亦可设 `"mqtt_mode": "subscribe"` 与 `"mqtt_broker_url": "mqtt://192.0.2.3:1883"`）：
+```json
+{
+  "room_id": "demo-room-01",
+  "room_name_zh": "睡眠房",
+  "db_path": "var/ctds-c01/ctds_c01.sqlite3",
+  "listen_port": 8765,
+  "poll_interval_s": 90,
+  "timeout_s": 5,
+  "retries": 2,
+  "max_backoff_s": 300,
+  "stale_after_s": 240,
+  "source": {
+    "source_id": "ag-room-01",
+    "mode": "LIVE",
+    "protocol": "mqtt",
+    "mqtt_mode": "listen",
+    "mqtt_listen_host": "0.0.0.0",
+    "mqtt_listen_port": 1883,
+    "mqtt_inactivity_s": 240,
+    "mqtt_dedup_window_s": 15,
+    "binding_revision": 2
+  }
+}
+```
+*口径说明：8PSL 载荷不含设备端测量时间戳，入库严格标记为 `provider_observed_at=null`、`time_basis="RECEIPT_ONLY"`；`http_status` 记为 `null`（状态码 `MQTT_OK` / `MQTT_DUPLICATE` / `MQTT_DISCONNECTED`），绝不伪装为 HTTP 200；8PSL 原生 `tvoc`（单位 `ppb`）独立映射为 `tvoc_ppb`，缺失的 `tvocIndex` 与 `noxIndex` 严格保持 `NOT_PROVIDED`（绝不填 `0`）。*
 
 ### 2.4 单次采集诊断与全量自动测试
 执行单次采集测试连通性：
@@ -115,28 +176,75 @@ PYTHONPATH=development/ctds python3 -B -m room_display run
 display: http://127.0.0.1:8765/  admin: /admin  mode=LIVE
 ```
 打开本地浏览器访问：
-- **大屏展示**：[http://127.0.0.1:8765/](http://127.0.0.1:8765/)（默认黑夜模式，支持右上角一键切换白昼模式）
+- **大屏展示**：[http://127.0.0.1:8765/](http://127.0.0.1:8765/)（默认首页 `/` 与 `/preview.html` 映射同一套现代驾驶舱大屏，支持右上角一键切换黑夜/白昼模式）
 - **字段配置**：[http://127.0.0.1:8765/admin](http://127.0.0.1:8765/admin)
 
-### 2.6 Eight Sleep Pod 5 六项睡眠指标与云端只读 API 接入（供后续 Coding Agent / 目标 Mac 交接）
-系统已在 `development/ctds/room_display/eight_sleep.py` 内置完整的 **Eight Sleep Pod 5 六项睡眠与温控指标** 提取、Level→℃ 查表转换（`RAW_TO_CELSIUS_MAP`，`-100..100` 映射 `13..44 ℃`）以及只读云端客户端：
-1. **心率 (`pod_heart_rate`, `bpm`)**：`GET /v1/users/{user_id}/trends` → `days[-1].sessions[-1].timeseries.heartRate[-1][1]`
-2. **心率变异性 HRV (`pod_hrv`, `ms`)**：`GET /v1/users/{user_id}/trends` → `days[-1].sleepQualityScore.hrv.current`
-3. **呼吸率 (`pod_respiratory_rate`, `次/分`)**：`GET /v1/users/{user_id}/trends` → `days[-1].sleepQualityScore.respiratoryRate.current`
-4. **床温 (`pod_bed_temp`, `℃`)**：`GET /v1/users/{user_id}/temperature` → `currentDeviceLevel` 经 `RAW_TO_CELSIUS_MAP` 查表转 `℃`
-5. **目标床温 (`pod_target_bed_temp`, `℃`)**：`GET /v1/devices/{device_id}` → `leftTargetHeatingLevel` / `rightTargetHeatingLevel` 经 `RAW_TO_CELSIUS_MAP` 查表转 `℃`
-6. **室温 (`pod_room_temp`, `℃`)**：`GET /v1/users/{user_id}/trends` → `days[-1].sessions[-1].timeseries.tempRoomC[-1][1]`
+**大屏数据口径**（全部来自本机数据库的真实采样，不插值、不补点）：
+- 小卡片趋势线：最近 1 小时，横轴按时间比例；采集中断超过约 3 个采集周期时曲线断开。服务刚启动时只有少量点，属正常。
+- 室内第 5 张卡片：`TVOC 浓度`（`tvoc_ppb`，单位 `ppb`，UBA 基准 `≤220 / ≤660 / >660 ppb`）；9PSL 的 `TVOC 指数`/`NOx 指数` 仍可在 `/admin` 中按需启用。
+- 点击卡片打开的大图：右上角可切换 `24小时 / 7天 / 30天 / 全量历史`（`/api/v1/rooms/<room>/series?metric=<指标>&range=24h|7d|30d|all`；长跨度采用保极值 Min-Max 抽稀，统计卡片按窗口内全部真实采样计算）。
+- 顶部时间轴：最近 24 个整点 + "实时"（`/api/v1/rooms/<room>/timeline?hours=24`）。每个整点取前后 30 分钟内最近的一次真实读数，没有则显示"—"；所有节点样式一致，无读数仅在悬停提示中注明"无读数"。点任一整点回看，点"实时"返回。
+- 床垫卡片只依据 Eight Sleep 自身状态：未绑定显示"Pod 6 · 待接入"与"—"，合成模式明确标注"合成测试数据"。
+- 升级后端后需重启服务（重新运行一键部署或 `run`），新接口才会生效。
 
-当后续 Coding Agent 或目标 Mac 拿到 Eight Sleep 账号后，可通过以下任一方式一键完成鉴权、用户/设备 ID 自动发现与 LIVE 采集：
-- **方式 A（CLI 一键绑定并测试首轮拉取）**：
+### 2.6 Eight Sleep Pod 6 床微环境指标与账号绑定（方案 B）
+系统在 `development/ctds/room_display/eight_sleep.py` 内置 **Eight Sleep Pod 6** Level→℃ 查表转换（`RAW_TO_CELSIUS_MAP`，`-100..100` 映射 `13..44 ℃`）、`360s` 独立陈旧度窗口、采集器退避解耦与只读拉取逻辑。大屏床微环境区以 **5 卡对称镜像布局** 呈现空间与床体微气候（左右床温卡片纵轴刻度自动统一，便于直观对比）：
+1. **左侧床温 & 左侧目标床温 (`pod_left_bed_temp` / `pod_left_target_temp`, `℃`)**
+2. **右侧床温 & 右侧目标床温 (`pod_right_bed_temp` / `pod_right_target_temp`, `℃`)**
+3. **全夜床体温度 (`pod_night_bed_temp`, `℃`)**：最近睡眠会话床温均值
+4. **床周环境室温 (`pod_room_temp`, `℃`)**：床周环境感知温度
+5. **左右温控运行状态与底座角度 (`pod_left_heating` / `pod_right_heating` 等)**
+
+> **隐私隔离说明**：后端按方案 B 采集入本机私密 SQLite，但心率、HRV、呼吸率等个人生理指标**不在前端大屏展示，亦不包含在 AI 诊断导出文本中**。
+
+**账号绑定与运行操作（本人裁决方案 B）**：
+- **一键部署交互式引导**：`deploy_mac.sh` 在完成 AirGradient 自动发现后，若检测到 Eight Sleep 尚未处于 LIVE 模式，会自动提示是否立即绑定 Eight Sleep 账号（并自动探测修复 macOS `python.org` 根证书缺失问题）；
+- **交互式独立绑定命令**（推荐，密码输入不回显，自动发现 user_id 与 device_id，权限 0600）：
   ```bash
-  PYTHONPATH=development/ctds python3 -B -m room_display --config var/ctds-c01/config.json \
-    --email "YOUR_EMAIL" --password "YOUR_PASSWORD" --side auto --es-mode LIVE bind-eight-sleep
+  PYTHONPATH=development/ctds python3 -B -m room_display bind-eight-sleep
   ```
-- **方式 B（环境变量或部署脚本参数直连）**：
-  ```bash
-  EIGHT_SLEEP_EMAIL="YOUR_EMAIL" EIGHT_SLEEP_PASSWORD="YOUR_PASSWORD" bash delivery/scripts/deploy_mac.sh
-  ```
+- **支持模式**：
+  - `LIVE`：真实只读接入，自动维护 Bearer Token 与 Refresh Token，401 自动单次刷新，Token 失效转为 `AUTH_PAUSED`（AirGradient 暂停时亦不影响 Eight Sleep 独立按周期采集）；
+  - `READY`：待接入占位状态，不发起网络请求；
+  - `SYNTHETIC`：合成脱敏测试数据回放。
+- **安全约束**：适配器绝不向 Eight Sleep 设备控制接口发起任何写请求；大屏导出至第三方 AI 分析时仅导出空间空气与床体温度切片（严格剔除个人生理指标、设备标识与网络凭据），由用户确认后再复制。
+
+### 2.7 一键打包（开发机/母机操作）
+在需要将工程打包迁移至目标机时，直接双击根目录下的 `一键打包_StarMap.command` 或在终端执行：
+```bash
+bash delivery/scripts/package_mac.sh
+```
+执行流程：
+1. **环境与设备检查**：自动探测 Python 3.10+ 环境；若检测到本机尚未绑定 Eight Sleep，提示`是否先绑定 Eight Sleep 再打包？[y/N]`。选是可立即交互绑定，选否则生成未绑定包。
+2. **全量沙箱测试**：自动在沙箱隔离环境（`CTDS_TEST_SANDBOX=1`）运行全量测试套件；若测试失败立即退出，退出码非零且不生成交付包。
+3. **清单一致性核验**：执行 `verify_manifest.py`，确保所有文件身份及哈希与清单一致。
+4. **单包构建与权限保护**：调用 `build_mac_bundle.py` 生成唯一交付包 `var/ctds-c01/StarMap-C01-Mac-OneClick.zip`，并自动设置权限为严格的 `0600`。
+5. **打印完整摘要**：终端打印包路径、大小、SHA256、Eight Sleep 绑定状态、AirGradient 状态以及数据库各来源行数（仅统计数字，不泄露任何私密数值）。
+*注：支持传入 `--no-prompt` 参数用于自动化流水线或无人值守打包；非终端环境（如 IDE 或后台任务）自动进入 `--no-prompt` 模式。*
+
+### 2.8 安装时接入账密（目标机现场交互）
+目标 Mac 解压交付包后，双击 `一键部署_StarMap.command`（内部执行 `deploy_mac.sh`）：
+1. **环境自检与配置就绪**：探测 Python 3.10+ 环境，准备配置文件（权限 `0600`）。
+2. **AirGradient 扫描与手动配置**：自动执行 `auto-bind` 扫描当前局域网内的 AirGradient。若未发现设备，将提示：
+   ```
+   未发现 AirGradient，可手动输入设备 IP（留空跳过）：
+   ```
+   输入合法 IP 后系统自动校验并持久化，下个周期自动连通。
+3. **Eight Sleep 凭据探测与交互接入**：
+   - **包内已含凭据**：脚本自动调用 `bind-eight-sleep --check` 静默验证连通性与设备发现。若验证通过，显示`Eight Sleep: 已接入 (LIVE)，验证成功`；若认证失败（如密码变更或 Token 失效），提示：
+     ```
+     Eight Sleep 认证失败，是否重新输入账号密码？[Y/n]
+     ```
+   - **包内无凭据**：直接友好提示：
+     ```
+     是否现在接入 Eight Sleep？[Y/n]
+     ```
+     默认为接入（直接回车）。
+   - **输入安全与防呆**：邮箱使用 `input()` 输入，密码使用 `getpass` 隐藏输入不回显；输入错误支持最多重试 3 次；可直接输入空邮箱跳过，跳过后安全保持 `READY` 占位模式。
+   - **首轮即刻校验**：绑定成功后立即拉取一次，终端展示 6 项 Pod 6 指标的提取状态（如 `OBSERVED`，绝不输出任何生理数值）。
+4. **沙箱自检与服务拉起**：自动执行 `self-test` 确认大屏投影正常，随后拉起后台服务并打开浏览器访问大屏。
+5. **部署终端汇总**：清晰打印 AirGradient 状态（在线/离线）、Eight Sleep 状态（在线/待接入/认证失效）及大屏访问地址。
+*注：传入 `--no-prompt` 参数时全程不弹窗、不询问，仅尝试已有凭据，无凭据或认证失败时安全保持原状并在汇总中注明。*
 
 ---
 
@@ -151,14 +259,14 @@ PYTHONPATH=development/ctds python3 -B -m room_display status
 ### 3.2 故障现象与系统自愈表现
 | 故障场景 | 大屏表现 | 系统行为与恢复方法 |
 |---|---|---|
-| **设备网络波动/断线** | 顶部状态变为“无法连接”，错误横幅提示“无法连接设备”；数值保持最后一次有效值并标为“已过期”，不白屏 | 采集器自动执行 2 秒/4 秒有界重试；若持续失败则退避至最高 300 秒，网络恢复后下一轮轮询自动自愈 |
+| **设备网络波动/断线** | 不显示在线/离线文字（顶栏与模块状态徽标已隐藏，避免偶发丢包闪烁）；数值继续显示上一期有效真实读数，超过 30 分钟未更新则回落为“—”，不白屏 | HTTP：采集器自动执行 2 秒/4 秒有界重试，持续失败退避至最高 300 秒；MQTT：静默看门狗记 `MQTT_DISCONNECTED`，设备下次推送立即自愈；云端回填会自动补齐断线窗口 |
 | **设备响应超时** | 错误横幅提示“设备响应超时”，大屏保持旧值 | 超时上限为 5 秒，不卡死采集线程；下一周期继续采集 |
 | **认证拒绝 (401/403)** | 状态变为“已暂停（认证拒绝）” | 系统将源状态标记为 `AUTH_PAUSED`，停止无限盲目重试；需现场人员确认设备权限后重启服务 |
 | **无效数据/部分字段为空** | 对应指标卡片显示“设备返回空值”或“未提供”，其余指标正常显示 | 严格区分 0（合法读数）、null（空值）与缺字段，系统不崩溃 |
 
 ### 3.3 本机大屏字段调整
 1. 访问 `http://127.0.0.1:8765/admin`；
-2. 勾选需要在大屏展示的指标（支持 PM2.5、CO2、温度、湿度、PM1.0、PM10、TVOC、NOx 等）；
+2. 勾选需要在大屏展示的指标（支持 PM2.5、CO2、温度、湿度、PM1.0、PM10、TVOC 浓度 ppb、TVOC 指数、NOx 指数等；单位列来自 `/api/v1/sources/capabilities`）；
 3. 可修改指标顺序（1–99）与中文名称（如改为“主卧空气质量”）；
 4. 点击“保存配置”，大屏在下一次轮询（5秒内）自动按新顺序与新名称呈现；
 5. 配置存入 SQLite 的 `display_settings` 表并自增版本号，重启后永久保留。
@@ -170,30 +278,94 @@ PYTHONPATH=development/ctds python3 -B -m room_display status
   直接重新执行 `PYTHONPATH=development/ctds python3 -B -m room_display run`。
   服务重新打开数据库，大屏立即呈现已有历史时序与最新配置。
 
-### 3.5 系统级开机自启、崩溃保活与 Mac 休眠唤醒 (launchd)
-现场展示笔记本如果需要长期无人值守运行，可使用轻量 macOS `launchd` 用户代理配置（模版见 `docs/operations/com.ctds.room-display.plist`）：
+### 3.5 官方守护进程管理与可选 launchd 配置
 
-1. **部署配置到 LaunchAgents**：
+#### 官方推荐：后台常驻守护 (`deploy_mac.sh` / `daemon.pid`)
+系统官方推荐的后台常驻管理方式为 `delivery/scripts/deploy_mac.sh` 内置的 `nohup` 守护机制：
+1. **启动服务**：
    ```bash
-   cp docs/operations/com.ctds.room-display.plist ~/Library/LaunchAgents/
-   # 检查 plist 中的 python3 路径与 WorkingDirectory 是否与本机一致
+   bash delivery/scripts/deploy_mac.sh
    ```
-2. **加载并启动服务**：
+   脚本会自动检查旧实例，若已存在运行实例则通过读取 `var/ctds-c01/daemon.pid` 精确终止旧进程（绝不使用模糊误杀的 `pkill -f`），随后拉起新后台进程并将新 PID 写入 `var/ctds-c01/daemon.pid`。
+2. **停止服务**：
+   读取 PID 并核对命令行后精确停止：
    ```bash
-   launchctl load ~/Library/LaunchAgents/com.ctds.room-display.plist
+   if [ -f var/ctds-c01/daemon.pid ]; then
+     OLD_PID="$(cat var/ctds-c01/daemon.pid 2>/dev/null || true)"
+     if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" -o command= 2>/dev/null | grep -q "room_display"; then
+       kill "$OLD_PID" 2>/dev/null || true
+       echo "服务 (PID $OLD_PID) 已停止"
+     else
+       echo "未检测到活跃的 room_display 进程，跳过终止"
+     fi
+     rm -f var/ctds-c01/daemon.pid
+   else
+     echo "未检测到 daemon.pid，无运行实例"
+   fi
    ```
-3. **卸载/停止服务**：
+
+#### 可选高级配置：系统级开机自启与保活 (launchd 模板)
+若目标 Mac 展厅需要整机无人值守、登录自启与崩溃自动拉起，可选用随包提供的 `docs/operations/com.ctds.room-display.plist` 模板：
+- 模板默认采用 `/usr/bin/env python3` 自动解析环境，且在 `EnvironmentVariables` 中显式设置 `PATH` 优先查找 `/opt/homebrew/bin` 与 `/usr/local/bin`，确保加载 3.10+ 版本，避免被 launchd 默认环境变量退化到系统旧版 Python。
+- 部署与管理：
+  ```bash
+  # 1. 复制模板至 LaunchAgents
+  cp docs/operations/com.ctds.room-display.plist ~/Library/LaunchAgents/
+  # 2. 编辑 plist，将 WorkingDirectory 和日志路径替换为目标机实际解压目录绝对路径
+  # 3. 加载并启动
+  launchctl load ~/Library/LaunchAgents/com.ctds.room-display.plist
+  # 4. 卸载停止
+  launchctl unload ~/Library/LaunchAgents/com.ctds.room-display.plist
+  ```
+- **休眠与唤醒自愈**：
+  - 休眠期间进程挂起，无无效网络重试；
+  - 唤醒时本地时间跃升，超过 `stale_after_s` 的指标内部标记为 `STALE`，大屏继续显示休眠前最后有效值（30 分钟保留上限后回落“—”）；
+  - 网络重新连通后采集线程自动自愈回最新读数，不发生未捕获异常；若已绑定云端历史回填，休眠期间的缺口会被自动补齐。
+
+### 3.6 Eight Sleep 认证失效处理与自愈
+当 Eight Sleep 密码在官方 App 被修改，或长期断网导致 Refresh Token 过期时，系统会自动保护并自愈：
+1. **系统表现**：
+   - 采集线程在遇到 401 且无法通过 Refresh Token 或密码重刷时，自动将源状态标记为 `AUTH_PAUSED`，停止盲目网络重试；
+   - 前端大屏床体状态标签显示“床垫认证失效 · 需重新绑定”，历史有效时序数据保持呈现并标注过期，不白屏；
+   - 守护进程不崩溃退出，AirGradient 室内空气指标照常轮询更新。
+2. **静默连通性诊断**：
+   现场运维人员可使用 `--check` 命令快速诊断当前保存凭据是否仍有效：
    ```bash
-   launchctl unload ~/Library/LaunchAgents/com.ctds.room-display.plist
+   PYTHONPATH=development/ctds python3 -B -m room_display bind-eight-sleep --check
    ```
-4. **系统异常与休眠唤醒行为机制**：
-   - **进程意外崩溃 (Crash)**：配置了 `KeepAlive: { SuccessfulExit: false }`，当进程异常退出码非 0 时，macOS 会在 `ThrottleInterval`（10秒）后自动重启拉起服务。
-   - **系统开机登录**：配置了 `RunAtLoad: true`，开机登录进入桌面后自动启动大屏后台服务。
-   - **Mac 笔记本休眠与合盖唤醒**：
-     - 休眠期间进程挂起，不会产生堆积网络请求；
-     - 唤醒时本地时间跃升，若休眠超过 180 秒（`stale_after_s`），大屏自动标记为“已过期”，保留休眠前最后有效值；
-     - 网络重新连通后，采集线程在下一周期自动拉取新读数，大屏无缝自愈回“实时数据”；
-     - 若唤醒瞬间网络未通，采集器捕获 `NO_CONNECTION` 并退避重试，不发生未处理崩溃。
+   输出 JSON 会明确返回 `{"authenticated": false, "device_ok": false, "outcome": "AUTH_REJECTED"}`，不修改任何现有配置。
+3. **重新绑定与自愈**：
+   在终端运行交互式绑定命令：
+   ```bash
+   PYTHONPATH=development/ctds python3 -B -m room_display bind-eight-sleep
+   ```
+   输入新密码后，客户端自动重新获取 Bearer Token 与设备 ID，更新 `0600` 权限配置，并触发一次即刻采集入库。后台轮询检测到新 Token 后状态立即自愈恢复，大屏徽章实时转为“Pod 6 · 实时在线”。
+
+### 3.7 一键连通性与局域网共享诊断
+现场遇到 Eight Sleep 云端连接异常或同网段其他设备无法访问大屏时，可直接双击根目录诊断器（报告自动脱敏并在桌面/访达高亮定位，不含密码、Token、完整邮箱、完整 UUID、MAC 地址或生理数值）：
+1. **Eight Sleep 连通性与 TLS 证书诊断**：双击 `检测_EightSleep连通性.command`（或执行 `python3 -B delivery/scripts/diag_eight_sleep.py`），自动区分 `MISSING_LOCAL_CA`（本机 Python 缺根证书）与 `UNTRUSTED_CHAIN`、DNS/TCP/API 状态及脱敏日志摘要。
+2. **局域网跨设备访问诊断**：双击 `检测_局域网共享连通性.command`（或执行 `python3 -B delivery/scripts/diag_lan_connectivity.py`），自动检查 `8765` 监听模式（`127.0.0.1` vs `0.0.0.0`）、物理网卡局域网 IP、Host 放行状态与 macOS 防火墙拦截提示。
+
+### 3.8 AirGradient 云端全量历史自动回填与断线自愈补齐（零手工导出表格）
+本地 MQTT / HTTP 只传递实时单帧测量数据，设备自身不存储过往数月/数年的历史序列。为实现零手工 CSV 导出的全自动历史汇聚，系统内置只读 `CloudBackfillManager`（标准库直连官方 `https://api.airgradient.com/public/api/v1`）：
+1. **云端授权开启步骤（仅需一次）**：
+   - 登录 AirGradient 控制台，进入对应场所或通用设置，将 **API Access** 切换为 **Enabled** 并保存，记录数字 `Location ID` 与 `API Token`；
+   - 在本机终端绑定（Token 通过隐藏输入写入本地 `0600` 权限私密配置 `var/ctds-c01/config.json`，不进入命令行历史或仓库）：
+     ```bash
+     PYTHONPATH=development/ctds python3 -B -m room_display --location-id <LOCATION_ID> bind-airgradient-cloud
+     ```
+   - 可随时执行静默自检（不回显任何凭据）：
+     ```bash
+     PYTHONPATH=development/ctds python3 -B -m room_display --check bind-airgradient-cloud
+     ```
+2. **启动自动全量回填 + 休眠/断电自动补齐**：
+   - 守护进程运行期间自动并发执行：近期 48 小时按 3 小时窗口拉取高精度 `/measures/raw`，更早历史按 9 天窗口向前回溯 `/measures/past` 直至 `cloud_earliest_date`（断点续传保存在 SQLite `meta` 表）；
+   - 本地实时 MQTT 读数保持最高优先级（`±45s` 内已有本地实时采样时自动跳过云端同刻副本，避免重复双点）；
+   - 当宿主机休眠唤醒、关机重启或设备断网超过 270 秒恢复后，系统自动唤醒增量缺口修补，仅补拉断线时间窗；
+   - 若云端接口未开启（`401`）或外网短暂离线，仅云端回填状态记为 `AUTH_REQUIRED` / `OFFLINE_RETRY` 并有界退避，**绝不影响局域网本地 MQTT 实时采集与大屏在线状态**。
+3. **大屏弹窗多跨度历史浏览**：
+   - 外层指标小卡片保持 **近 1 小时** 实时趋势；
+   - 点击任意指标卡片进入时序大图弹窗后，右上角支持一键切换 **`24小时` / `7天` / `30天` / `全量历史`**，长跨度序列采用保留真实极值点（Min-Max Peak-Preserving）的无插值抽稀渲染，底部统计卡片严格展示全窗口真实总采样点数、算术均值与极值区间。
 
 ---
 

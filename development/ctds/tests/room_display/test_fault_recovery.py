@@ -174,6 +174,114 @@ class FaultRecoveryDrillTest(unittest.TestCase):
         finally:
             dev.close()
 
+    def test_eight_sleep_auth_pause_backoff_and_in_memory_token_sync(self):
+        """Eight Sleep: (1) refreshed token updates Collector in-memory cfg, (2) 429 backs off >=900s without double-POST,
+        (3) AUTH_REJECTED pauses Eight Sleep without infinite retries while AirGradient keeps collecting, and hot-resumes on rebind."""
+        import json
+        from pathlib import Path
+        from room_display import config
+        from test_ui import FakeEightSleepServer
+
+        dev = FakeDevice()
+        es_srv = FakeEightSleepServer()
+        try:
+            cfg_path = Path(self.tmp_dir.name) / "config.json"
+            c = cfg(mode="LIVE", base_url=dev.base_url, db_path=str(self.db_path), retries=0)
+            c["eight_sleep"] = {
+                "source_id": "pod-room-01",
+                "mode": "LIVE",
+                "side": "solo",
+                "timezone": "Asia/Shanghai",
+                "binding_revision": 1,
+                "email": "user@example.com",
+                "password": "valid-password",
+                "bearer_token": "expired-token",
+                "refresh_token": "initial-rt",
+                "user_id": "mock-user-001",
+                "device_id": "mock-device-002",
+                "base_url": es_srv.base_url,
+                "auth_url": es_srv.auth_url,
+            }
+            config.save_config(config.validate(c), cfg_path)
+            store = Store(self.db_path)
+            collector.register(store, c, clock=self.clock)
+            col = collector.Collector(store, c, clock=self.clock, sleeper=lambda _: None, config_path=cfg_path)
+
+            # 1. First poll triggers 401 -> refresh_auth -> updates BOTH disk config AND in-memory c["eight_sleep"]
+            es_srv.should_401_once = True
+            col.poll_eight_sleep_if_due()
+            self.assertEqual(c["eight_sleep"]["bearer_token"], "refreshed-token-999")
+            token_posts_after_1 = sum(1 for m, p, *_ in es_srv.hits if m == "POST" and p == "/v1/tokens")
+            self.assertEqual(token_posts_after_1, 1)
+
+            # Next 60s poll uses the updated in-memory token directly (zero new POST /v1/tokens!)
+            self.clock.advance(61)
+            col.poll_eight_sleep_if_due()
+            token_posts_after_2 = sum(1 for m, p, *_ in es_srv.hits if m == "POST" and p == "/v1/tokens")
+            self.assertEqual(token_posts_after_2, 1)
+
+            # 2. Simulate AUTH_REJECTED (password changed + refresh rejected) -> enters AUTH_PAUSED & stops hammering
+            es_srv.refresh_fails = True
+            c["eight_sleep"]["password"] = "wrong"
+            es_srv.should_401_once = True
+            es_srv._401_done = False
+            self.clock.advance(61)
+            col.poll_eight_sleep_if_due()
+            self.assertEqual(col.es_paused_reason, "AUTH_PAUSED")
+            self.assertEqual(store.source("pod-room-01")["status"], "AUTH_PAUSED")
+            hits_when_paused = len(es_srv.hits)
+
+            # Subsequent 60s ticks must NOT touch Eight Sleep server while AirGradient round() still succeeds
+            for _ in range(3):
+                self.clock.advance(65)
+                col.poll_eight_sleep_if_due()
+                self.assertEqual(col.round(), "OK")
+            self.assertEqual(len(es_srv.hits), hits_when_paused)
+            self.assertEqual(store.source("pod-room-01")["status"], "AUTH_PAUSED")
+
+            # 3. External rebind (binding_revision incremented on disk) hot-resumes Eight Sleep without daemon restart
+            es_srv.refresh_fails = False
+            rebound = config.load(cfg_path)
+            rebound["eight_sleep"]["password"] = "valid-password"
+            rebound["eight_sleep"]["bearer_token"] = "valid-token-123"
+            rebound["eight_sleep"]["binding_revision"] = 2
+            config.save_config(config.validate(rebound), cfg_path)
+            # Ensure mtime_ns advances
+            os_utime_ns = cfg_path.stat().st_mtime_ns + 1_000_000
+            import os
+            os.utime(cfg_path, ns=(os_utime_ns, os_utime_ns))
+
+            self.clock.advance(65)
+            col.poll_eight_sleep_if_due()
+            self.assertIsNone(col.es_paused_reason)
+            self.assertEqual(store.source("pod-room-01")["status"], "ACTIVE")
+
+            # 4. HTTP 429 on refresh_auth short-circuits without double-hammering authenticate() and backs off >=900s
+            es_srv.refresh_429 = True
+            es_srv.should_401_once = True
+            es_srv._401_done = False
+            posts_before_429 = sum(1 for m, p, *_ in es_srv.hits if m == "POST" and p == "/v1/tokens")
+            self.clock.advance(65)
+            col.poll_eight_sleep_if_due()
+            posts_after_429 = sum(1 for m, p, *_ in es_srv.hits if m == "POST" and p == "/v1/tokens")
+            self.assertEqual(posts_after_429 - posts_before_429, 1, "429 on refresh must not send a 2nd password POST")
+            self.assertEqual(store.latest_attempt("pod-room-01")["http_status"], 429)
+
+            hits_during_429_cooldown = len(es_srv.hits)
+            self.clock.advance(300)  # +5 min (< 900s cooldown) -> must stay silent
+            col.poll_eight_sleep_if_due()
+            self.assertEqual(len(es_srv.hits), hits_during_429_cooldown)
+
+            es_srv.refresh_429 = False
+            self.clock.advance(650)  # total +950s (> 900s cooldown) -> self-recovers!
+            col.poll_eight_sleep_if_due()
+            self.assertEqual(col.es_consecutive_failures, 0)
+            self.assertEqual(store.latest_attempt("pod-room-01")["outcome"], "OK")
+            store.close()
+        finally:
+            es_srv.close()
+            dev.close()
+
 
 if __name__ == "__main__":
     unittest.main()

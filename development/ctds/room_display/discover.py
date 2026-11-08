@@ -14,7 +14,7 @@ import subprocess
 from . import adapter, catalog, config
 
 AG_SIGNATURE_KEYS = frozenset({
-    "pm02", "rco2", "atmp", "rhum", "pm01", "pm10", "tvocIndex", "noxIndex", "pm003Count"
+    "pm02", "rco2", "atmp", "rhum", "pm01", "pm10", "tvocIndex", "noxIndex", "pm003Count", "tvoc"
 })
 _ARP_IP_RE = re.compile(r"\((\d{1,3}(?:\.\d{1,3}){3})\)")
 _IFCONFIG_INET_RE = re.compile(r"inet\s+(\d{1,3}(?:\.\d{1,3}){3})\s+netmask")
@@ -42,7 +42,7 @@ def probe_base_url(base_url, *, timeout=0.8, fetcher=None, clock=adapter.utc_now
         return None
     if not is_airgradient_payload(doc):
         return None
-    metrics_count = sum(1 for m in catalog.METRICS.values() if m["field"] in doc)
+    metrics_count = sum(1 for m in catalog.ALL_AG_METRICS.values() if m["field"] in doc)
     return {"base_url": base_url, "metrics_count": metrics_count}
 
 
@@ -188,28 +188,15 @@ def auto_bind(config_path=None, *, candidates=None, timeout=0.8, fetcher=None):
         changed = True
 
     es = cfg.setdefault("eight_sleep", dict(config.DEFAULTS["eight_sleep"]))
-    env_email = os.environ.get("EIGHT_SLEEP_EMAIL")
-    env_pass = os.environ.get("EIGHT_SLEEP_PASSWORD")
-    env_tok = os.environ.get("EIGHT_SLEEP_BEARER_TOKEN")
-    if (env_email and env_pass) or env_tok:
-        if env_email:
-            es["email"] = env_email
-        if env_pass:
-            es["password"] = env_pass
-        if env_tok:
-            es["bearer_token"] = env_tok
-        if es.get("mode") != "LIVE":
-            es["mode"] = "LIVE"
-            es["binding_revision"] = int(es.get("binding_revision", 1)) + 1
+    if config.migrate_doc(cfg):
         changed = True
-    elif (es.get("email") and es.get("password")) or es.get("bearer_token"):
-        if es.get("mode") == "READY":
-            es["mode"] = "LIVE"
-            changed = True
 
-    preferred = cfg["source"].get("base_url")
-    found = discover_airgradient(preferred_base_url=preferred, candidates=candidates,
-                                 timeout=timeout, fetcher=fetcher)
+    if cfg["source"].get("protocol", "http") == "mqtt" and cfg["source"].get("mode") == "LIVE" and candidates is None:
+        found = None
+    else:
+        preferred = cfg["source"].get("base_url")
+        found = discover_airgradient(preferred_base_url=preferred, candidates=candidates,
+                                     timeout=timeout, fetcher=fetcher)
     if found is not None:
         old_url = cfg["source"].get("base_url")
         old_mode = cfg["source"].get("mode")
@@ -222,8 +209,7 @@ def auto_bind(config_path=None, *, candidates=None, timeout=0.8, fetcher=None):
             changed = True
 
     if changed:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        config.save_config(cfg, path)
 
     return {
         "discovered": found is not None,

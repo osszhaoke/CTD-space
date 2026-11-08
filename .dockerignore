@@ -1,0 +1,12 @@
+.git
+.ai-context
+.agents
+.gemini
+evidence
+artifacts
+_planning
+specs
+*.pyc
+__pycache__
+*.zip
+.DS_Store
